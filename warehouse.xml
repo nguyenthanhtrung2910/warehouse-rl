@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<SortingCenterConfig xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <rowNumber>5</rowNumber>
+  <columnNumber>5</columnNumber>
+  <lineNumber>10</lineNumber>
+  <subRowNumber>10</subRowNumber>
+  <isDoubleLine>false</isDoubleLine>
+  <palleteSize>20</palleteSize>
+  <skuSize>100</skuSize>
+  <minSku>5</minSku>
+  <shutleNumber>3</shutleNumber>
+  <pickBoxFromDisassemblyChannelTime>3</pickBoxFromDisassemblyChannelTime>
+  <placeBoxIntoPalletAssemblyTime>3</placeBoxIntoPalletAssemblyTime>
+  <placeBoxIntoChannelTime>3</placeBoxIntoChannelTime>
+  <pickBoxFromChannelTime>3</pickBoxFromChannelTime>
+  <robotSpeedMs>5</robotSpeedMs>
+  <robotSpawnPoints>
+    <JoinPoint>
+      <row>-1</row>
+      <col>22</col>
+      <join_row>0</join_row>
+      <join_col>22</join_col>
+    </JoinPoint>
+  </robotSpawnPoints>
+  <depaletizePoints>
+    <JoinPoint>
+      <row>-1</row>
+      <col>11</col>
+      <join_row>0</join_row>
+      <join_col>11</join_col>
+    </JoinPoint>
+  </depaletizePoints>
+  <paletizePoint>
+    <JoinPoint>
+      <row>58</row>
+      <col>44</col>
+      <join_row>7</join_row>
+      <join_col>44</join_col>
+    </JoinPoint>
+  </paletizePoint>
+</SortingCenterConfig>
