@@ -1,18 +1,36 @@
 # from pettingzoo import ParallelEnv
 from __future__ import annotations
+
+import math
+from enum import Enum
 from dataclasses import dataclass
 from typing import Any
-import networkx as nx
+
 import pygame
+
 from warehouse_rl import sprites
-import math
 
 pygame.init()
 
-NODE_SIZE = (30, 30)
+NODE_SIZE = (46, 30)
+FRAME_PER_STEP = 5
 
 
-def draw_arrow(surface, color, start, end, width=2, arrow_size=10):
+class Direction(Enum):
+    Up = 1
+    Down = 2
+    Left = 3
+    Right = 4
+
+
+def draw_arrow(
+    surface: pygame.Surface,
+    color: tuple[int, int, int],
+    start: tuple[float, float],
+    end: tuple[float, float],
+    width: int = 2,
+    arrow_size: float = 10,
+):
     pygame.draw.line(surface, color, start, end, width)
     dx = end[0] - start[0]
     dy = end[1] - start[1]
@@ -28,9 +46,8 @@ def draw_arrow(surface, color, start, end, width=2, arrow_size=10):
     pygame.draw.polygon(surface, color, [end, left, right])
 
 
-@dataclass(frozen=False)
+@dataclass
 class RayNode:
-    id: str
     x: int
     y: int
     isRobotSpawn: bool
@@ -39,16 +56,16 @@ class RayNode:
     left: RayNode | None = None
     right: RayNode | None = None
     robot: sprites.Shuttle | None = None
+    from_line: LineNode | None = None
+    to_line: LineNode | None = None
 
-    # hash based only on the node ID
-    def __hash__(self):
-        return hash(self.id)
+    @property
+    def id(self):
+        return f"{self.x}.{self.y}"
 
-    # equality based on ID
-    def __eq__(self, other: RayNode):
-        if not isinstance(other, RayNode):
-            return False
-        return self.id == other.id
+    @property
+    def adjacent(self):
+        return [node for node in [self.up, self.down, self.left, self.right] if node]
 
     @property
     def world_pos(self):
@@ -59,16 +76,30 @@ class RayNode:
             surface,
             color=(0, 0, 255),
             center=self.world_pos,
-            radius=NODE_SIZE[0] / 4,
+            radius=min(NODE_SIZE) / 4,
         )
+        if self.from_line:
+            pygame.draw.line(
+                surface, (30, 0, 30), self.world_pos, self.from_line.world_pos, 1
+            )
+        if self.to_line:
+            pygame.draw.line(
+                surface, (30, 30, 0), self.world_pos, self.to_line.world_pos, 1
+            )
+        # rect = pygame.Rect(0, 0, NODE_SIZE[0], NODE_SIZE[1])
+        # rect.center = self.world_pos
+        # pygame.draw.rect(surface, (0, 0, 0), rect, 1)
 
 
-@dataclass(frozen=True)
+@dataclass
 class LineNode:
-    id: str
     x: int
     y: int
     isPaletize: bool
+
+    @property
+    def id(self):
+        return f"{self.x}.{self.y}"
 
     @property
     def world_pos(self):
@@ -79,14 +110,127 @@ class LineNode:
             surface,
             color=(255, 255, 0),
             center=self.world_pos,
-            radius=NODE_SIZE[0] / 4,
+            radius=min(NODE_SIZE) / 4,
         )
+
+
+class WarehouseMap:
+    ray_nodes: dict[str, RayNode]
+    line_nodes: dict[str, LineNode]
+
+    def __init__(
+        self,
+        n_rows: int,
+        n_columns: int,
+        n_lines: int,
+        n_subrows: int,
+        n_rays: int,
+    ):
+        assert n_rays in (1, 2)
+        self.ray_nodes = {}
+        self.line_nodes = {}
+        direction: bool = False
+        line_begin_end = []
+        # add horizontal edges
+        for row in range(n_rows + 1):
+            # double ray in first and last rays
+            if row == 0:
+                for pair in range(0, 2):
+                    line_begin_end.append(
+                        self.__add_horizontal_ray(
+                            (n_lines + 1) * n_columns + 1,
+                            pair,
+                            direction,
+                        )
+                    )
+                    direction = not direction
+            elif row != n_rows:
+                for pair in range(0, n_rays):
+                    line_begin_end.append(
+                        self.__add_horizontal_ray(
+                            (n_lines + 1) * n_columns + 1,
+                            (n_subrows + n_rays) * row - n_rays + pair + 2,
+                            direction,
+                        )
+                    )
+                    direction = not direction
+            else:
+                for pair in range(0, 2):
+                    line_begin_end.append(
+                        self.__add_horizontal_ray(
+                            (n_lines + 1) * n_columns + 1,
+                            (n_subrows + n_rays) * row - n_rays + pair + 2,
+                            direction,
+                        )
+                    )
+                    direction = not direction
+
+        # add line nodes
+        for row in range(n_rows):
+            for column in range(n_columns):
+                for innner_row in range(n_subrows):
+                    for innner_column in range(n_lines):
+                        line_node = LineNode(
+                            column * (n_lines + 1) + innner_column + 1,
+                            row * (n_subrows + n_rays) + innner_row + 2,
+                            False,
+                        )
+                        self.line_nodes[line_node.id] = line_node
+
+        # add vertical ray
+        for i in range(len(line_begin_end) - 1):
+            self.__add_ray_edge(
+                line_begin_end[i][0], line_begin_end[i + 1][0], Direction.Down
+            )
+        for i in range(len(line_begin_end) - 1, 0, -1):
+            self.__add_ray_edge(
+                line_begin_end[i][1], line_begin_end[i - 1][1], Direction.Up
+            )
+
+        # add link from ray to line
+        for ray_node in self.ray_nodes.values():
+            for line_node in self.line_nodes.values():
+                if (line_node.x == ray_node.x) and (line_node.y - ray_node.y == -1):
+                    ray_node.from_line = line_node
+                if (line_node.x == ray_node.x) and (line_node.y - ray_node.y == 1):
+                    ray_node.to_line = line_node
+
+    def __add_ray_edge(self, n1: RayNode, n2: RayNode, direction: Direction):
+        self.ray_nodes.setdefault(n1.id, n1)
+        self.ray_nodes.setdefault(n2.id, n2)
+        n_1 = self.ray_nodes[n1.id]
+        n_2 = self.ray_nodes[n2.id]
+        if direction == Direction.Up:
+            n_1.up = n_2
+        elif direction == Direction.Down:
+            n_1.down = n_2
+        elif direction == Direction.Left:
+            n_1.left = n_2
+        elif direction == Direction.Right:
+            n_1.right = n_2
+        else:
+            raise ValueError("No available direction.")
+
+    def __add_horizontal_ray(self, n_nodes, y, positive_direction: bool):
+        if positive_direction:
+            for x in range(n_nodes - 1):
+                self.__add_ray_edge(
+                    RayNode(x, y, False), RayNode(x + 1, y, False), Direction.Right
+                )
+        else:
+            for x in range(n_nodes - 1, 0, -1):
+                self.__add_ray_edge(
+                    RayNode(x, y, False), RayNode(x - 1, y, False), Direction.Left
+                )
+        return self.ray_nodes[f"0.{y}"], self.ray_nodes[f"{n_nodes - 1}.{y}"]
 
 
 class Warehouse:
     agents: list[str]
-    graph: nx.DiGraph
-    size: tuple[int, int]
+    robot: sprites.Shuttle
+    robot_sprites: pygame.sprite.Group
+    map: WarehouseMap
+    screen_size: tuple[int, int]
     background: pygame.Surface
     clock: pygame.time.Clock
     metadata: dict[str, Any] = {
@@ -107,161 +251,60 @@ class Warehouse:
         is_double_line: bool,
     ) -> None:
         # super().__init__()
-        self.agents = [f"a{i}" for i in range(n_robots)]
+        self.agents = [f"a.{i}" for i in range(n_robots)]
         n_rays: int = 2 if is_double_line else 1
-        self.__init_graph(n_rows, n_columns, n_lines, n_subrows, n_rays)
-        self.size = (
+        self.map = WarehouseMap(n_rows, n_columns, n_lines, n_subrows, n_rays)
+        self.screen_size = (
             (n_lines + 1) * n_columns + 1,
             n_rows * n_subrows + 4 + n_rays * (n_rows - 1),
         )
+        self.robot = sprites.Shuttle(self.map.ray_nodes["0.0"])
+        self.robot_sprites = pygame.sprite.Group()
+        self.robot_sprites.add(self.robot)
+        self.robot_sprites.add(sprites.Shuttle(self.map.ray_nodes["4.1"]))
         # draw a background
         self.background = pygame.Surface(
-            (NODE_SIZE[0] * self.size[0], NODE_SIZE[1] * self.size[1])
+            (NODE_SIZE[0] * self.screen_size[0], NODE_SIZE[1] * self.screen_size[1])
         )
         self.background.fill((255, 255, 255))
         # draw graph
-        for node in self.graph.nodes:
-            node.draw(self.background)
-        for node in self.graph.nodes:
-            for next in self.graph.successors(node):
-                draw_arrow(self.background, (0, 0, 0), node.world_pos, next.world_pos)
+        for ray_node in self.map.ray_nodes.values():
+            ray_node.draw(self.background)
+        for line_node in self.map.line_nodes.values():
+            line_node.draw(self.background)
+        for node in self.map.ray_nodes.values():
+            for adjacent_node in node.adjacent:
+                draw_arrow(
+                    self.background,
+                    (168, 177, 179),
+                    node.world_pos,
+                    adjacent_node.world_pos,
+                )
         self.clock = pygame.time.Clock()
         self.screen = None
-
-    def __add_edge(self, n1: RayNode, n2: RayNode, direction: bool):
-        if direction:
-            self.graph.add_edge(n1, n2)
-        else:
-            self.graph.add_edge(n2, n1)
-
-    def __init_graph(
-        self,
-        n_rows: int,
-        n_columns: int,
-        n_lines: int,
-        n_subrows: int,
-        n_rays: int,
-    ):
-        self.graph = nx.DiGraph()
-        direction: bool = False
-        # add horizontal edges
-        for row in range(n_rows + 1):
-            # double ray in first and last rays
-            if row == n_rows:
-                for pair in range(0, 2):
-                    for column in range((n_lines + 1) * n_columns):
-                        self.__add_edge(
-                            RayNode(
-                                f"{column}.{(n_subrows + n_rays) * row - n_rays + pair + 2}",
-                                column,
-                                (n_subrows + n_rays) * row - n_rays + pair + 2,
-                                False,
-                            ),
-                            RayNode(
-                                f"{column + 1}.{(n_subrows + n_rays) * row - n_rays + pair + 2}",
-                                column + 1,
-                                (n_subrows + n_rays) * row - n_rays + pair + 2,
-                                False,
-                            ),
-                            direction,
-                        )
-                    direction = not direction
-            elif row == 0:
-                for pair in range(0, 2):
-                    for column in range((n_lines + 1) * n_columns):
-                        self.__add_edge(
-                            RayNode(
-                                f"{column}.{pair}",
-                                column,
-                                pair,
-                                False,
-                            ),
-                            RayNode(
-                                f"{column + 1}.{pair}",
-                                column + 1,
-                                pair,
-                                False,
-                            ),
-                            direction,
-                        )
-                    direction = not direction
-            # else add number rays based on is_double_line
-            else:
-                for pair in range(0, n_rays):
-                    for column in range((n_lines + 1) * n_columns):
-                        self.__add_edge(
-                            RayNode(
-                                f"{column}.{(n_subrows + n_rays) * row - n_rays + pair + 2}",
-                                column,
-                                (n_subrows + n_rays) * row - n_rays + pair + 2,
-                                False,
-                            ),
-                            RayNode(
-                                f"{column + 1}.{(n_subrows + n_rays) * row - n_rays + pair + 2}",
-                                column + 1,
-                                (n_subrows + n_rays) * row - n_rays + pair + 2,
-                                False,
-                            ),
-                            direction,
-                        )
-                    direction = not direction
-        # add line nodes
-        for row in range(n_rows):
-            for column in range(n_columns):
-                for innner_row in range(n_subrows):
-                    for innner_column in range(n_lines):
-                        self.graph.add_node(
-                            LineNode(
-                                f"{column * (n_lines + 1) + innner_column + 1}.{row * (n_subrows + n_rays) + innner_row + 2}",
-                                column * (n_lines + 1) + innner_column + 1,
-                                row * (n_subrows + n_rays) + innner_row + 2,
-                                False,
-                            )
-                        )
-        # add vertical edges
-        for n1 in self.graph.nodes:
-            for n2 in self.graph.nodes:
-                if (n2.y - n1.y == 1) or (n2.y - n1.y == (n_subrows + 1)):
-                    if n1.x == 0 and n2.x == 0:
-                        self.__add_edge(n1, n2, True)
-                    if (
-                        n1.x == (n_lines + 1) * n_columns
-                        and n2.x == (n_lines + 1) * n_columns
-                    ):
-                        self.__add_edge(n1, n2, False)
-                if (
-                    (n2.y - n1.y == 1)
-                    and (n1.x == n2.x)
-                    and (
-                        (type(n2) is LineNode and type(n1) is RayNode)
-                        or (type(n1) is LineNode and type(n2) is RayNode)
-                    )
-                ):
-                    self.__add_edge(n2, n1, False)
-
-        for node in self.graph.nodes:
-            if type(node) is RayNode:
-                for next in self.graph.successors(node):
-                    if next.y - node.y == 1:
-                        node.down = next
-                    if next.y - node.y == -1:
-                        node.up = next
-                    if next.x - node.x == -1:
-                        node.left = next
-                    if next.x - node.x == 1:
-                        node.right = next
 
     # def reset(self, seed: int | None = None, options: dict | None = None):
     #     return super().reset(seed, options)
 
-    # def step(self, actions: dict[str, int]):
-    #     return super().step(actions)
+    def step(self, action: sprites.Action):
+        self.robot.step(action)
+        # for smooth movement
+        for i in range(1, FRAME_PER_STEP + 1):
+            diff = tuple(
+                a - b
+                for a, b in zip(self.robot.next_rect.center, self.robot.rect.center)
+            )
+            self.robot.rect.center = tuple(
+                a + i / FRAME_PER_STEP * b for a, b in zip(self.robot.rect.center, diff)
+            )
+            self.render()
 
     def render(self):
         if self.screen is None:
             self.screen = pygame.display.set_mode(self.background.get_size())
             pygame.display.set_caption("WAREHOUSE")
         self.screen.blit(self.background, (0, 0))
+        self.robot_sprites.draw(self.screen)
         self.clock.tick(self.metadata["render_fps"])
         pygame.display.update()
 
@@ -271,10 +314,19 @@ class Warehouse:
 
 if __name__ == "__main__":
     env = Warehouse(2, 3, 3, 5, 5, False)
-    # running = True
-    # while running:
-    #     for event in pygame.event.get():
-    #         if event.type == pygame.QUIT:
-    #             running = False
-    #     env.render()
-    # pygame.quit()
+    running = True
+    while running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_w:
+                    env.step(sprites.Action.UP)
+                if event.key == pygame.K_s:
+                    env.step(sprites.Action.DOWN)
+                if event.key == pygame.K_a:
+                    env.step(sprites.Action.LEFT)
+                if event.key == pygame.K_d:
+                    env.step(sprites.Action.RIGHT)
+        env.render()
+    pygame.quit()
