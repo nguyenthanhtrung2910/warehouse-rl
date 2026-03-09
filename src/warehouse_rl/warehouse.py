@@ -2,17 +2,19 @@
 from __future__ import annotations
 
 import math
+from abc import ABC, abstractmethod
 from enum import Enum
-from dataclasses import dataclass
-from typing import Any
+from typing import Any, override
 
 import pygame
+from pygame.color import Color
+from pygame.math import Vector2
 
 from warehouse_rl import sprites
 
 pygame.init()
 
-NODE_SIZE = (46, 30)
+NODE_SIZE = Vector2(50, 30)
 FRAME_PER_STEP = 5
 
 
@@ -23,61 +25,86 @@ class Direction(Enum):
     Right = 4
 
 
-def draw_arrow(
-    surface: pygame.Surface,
-    color: tuple[int, int, int],
-    start: tuple[float, float],
-    end: tuple[float, float],
-    width: int = 2,
-    arrow_size: float = 10,
-):
-    pygame.draw.line(surface, color, start, end, width)
-    dx = end[0] - start[0]
-    dy = end[1] - start[1]
-    angle = math.atan2(dy, dx)
-    left = (
-        end[0] - arrow_size * math.cos(angle - math.pi / 6),
-        end[1] - arrow_size * math.sin(angle - math.pi / 6),
-    )
-    right = (
-        end[0] - arrow_size * math.cos(angle + math.pi / 6),
-        end[1] - arrow_size * math.sin(angle + math.pi / 6),
-    )
-    pygame.draw.polygon(surface, color, [end, left, right])
+class Node(ABC):
+    __x: int
+    __y: int
+    __id: str
+    __world_pos: Vector2
 
+    def __init__(self, x: int, y: int):
+        self.__x = x
+        self.__y = y
+        self.__id = f"{self.__x}.{self.__y}"
+        self.__world_pos = (
+            Vector2(self.__x + 0.5, self.__y + 1.5).elementwise() * NODE_SIZE
+        )
 
-@dataclass
-class RayNode:
-    x: int
-    y: int
-    isRobotSpawn: bool
-    up: RayNode | None = None
-    down: RayNode | None = None
-    left: RayNode | None = None
-    right: RayNode | None = None
-    robot: sprites.Shuttle | None = None
-    from_line: LineNode | None = None
-    to_line: LineNode | None = None
+    def __eq__(self, other: object):
+        if not isinstance(other, Node):
+            return NotImplemented
+        return self.__x == other.x and self.__y == other.y
+
+    @property
+    def x(self):
+        return self.__x
+
+    @property
+    def y(self):
+        return self.__y
 
     @property
     def id(self):
-        return f"{self.x}.{self.y}"
-
-    @property
-    def adjacent(self):
-        return [node for node in [self.up, self.down, self.left, self.right] if node]
+        return self.__id
 
     @property
     def world_pos(self):
-        return (self.x + 0.5) * NODE_SIZE[0], (self.y + 0.5) * NODE_SIZE[1]
+        return self.__world_pos
 
+    @abstractmethod
     def draw(self, surface: pygame.Surface):
-        pygame.draw.circle(
-            surface,
-            color=(0, 0, 255),
-            center=self.world_pos,
-            radius=min(NODE_SIZE) / 4,
-        )
+        pass
+
+
+class RayNode(Node):
+    isRobotSpawn: bool
+    up: RayNode | None
+    down: RayNode | None
+    left: RayNode | None
+    right: RayNode | None
+    from_line: LineNode | None
+    to_line: LineNode | None
+    robot: sprites.Shuttle | None
+
+    def __init__(
+        self,
+        x: int,
+        y: int,
+        isRobotSpawn: bool = False,
+        up: RayNode | None = None,
+        down: RayNode | None = None,
+        left: RayNode | None = None,
+        right: RayNode | None = None,
+        from_line: LineNode | None = None,
+        to_line: LineNode | None = None,
+        robot: sprites.Shuttle | None = None,
+    ):
+        super().__init__(x, y)
+        self.isRobotSpawn = isRobotSpawn
+        self.up = up
+        self.down = down
+        self.left = left
+        self.right = right
+        self.from_line = from_line
+        self.to_line = to_line
+        self.robot = robot
+
+    @property
+    def neighbors(self):
+        return [node for node in [self.up, self.down, self.left, self.right] if node]
+
+    @override
+    def draw(self, surface: pygame.Surface):
+        pygame.draw.circle(surface, (0, 0, 255), self.world_pos, min(NODE_SIZE) / 4)
         if self.from_line:
             pygame.draw.line(
                 surface, (30, 0, 30), self.world_pos, self.from_line.world_pos, 1
@@ -86,37 +113,40 @@ class RayNode:
             pygame.draw.line(
                 surface, (30, 30, 0), self.world_pos, self.to_line.world_pos, 1
             )
-        # rect = pygame.Rect(0, 0, NODE_SIZE[0], NODE_SIZE[1])
-        # rect.center = self.world_pos
-        # pygame.draw.rect(surface, (0, 0, 0), rect, 1)
 
 
-@dataclass
-class LineNode:
-    x: int
-    y: int
-    isPaletize: bool
+class LineNode(Node):
+    isPalletize: bool
+    next_node: LineNode | None
+    parcel: sprites.Parcel | None
 
-    @property
-    def id(self):
-        return f"{self.x}.{self.y}"
+    def __init__(
+        self,
+        x: int,
+        y: int,
+        isPalletize: bool = False,
+        next_node: LineNode | None = None,
+        parcel: sprites.Parcel | None = None,
+    ):
+        super().__init__(x, y)
+        self.isPalletize = isPalletize
+        self.next_node = next_node
+        self.parcel = parcel
 
-    @property
-    def world_pos(self):
-        return (self.x + 0.5) * NODE_SIZE[0], (self.y + 0.5) * NODE_SIZE[1]
-
+    @override
     def draw(self, surface: pygame.Surface):
-        pygame.draw.circle(
-            surface,
-            color=(255, 255, 0),
-            center=self.world_pos,
-            radius=min(NODE_SIZE) / 4,
-        )
+        radius = min(NODE_SIZE) / 3 if self.isPalletize else min(NODE_SIZE) / 4
+        pygame.draw.circle(surface, (255, 255, 0), self.world_pos, radius)
+        if self.next_node:
+            pygame.draw.line(
+                surface, (30, 30, 0), self.world_pos, self.next_node.world_pos, 1
+            )
 
 
 class WarehouseMap:
     ray_nodes: dict[str, RayNode]
     line_nodes: dict[str, LineNode]
+    scene: pygame.Surface
 
     def __init__(
         self,
@@ -127,17 +157,56 @@ class WarehouseMap:
         n_rays: int,
     ):
         assert n_rays in (1, 2)
+        self.__create_rays(n_rows, n_columns, n_lines, n_subrows, n_rays)
+        self.__create_lines(n_rows, n_columns, n_lines, n_subrows, n_rays)
+        screen_size = Vector2(
+            (n_lines + 1) * n_columns + 1,
+            n_rows * n_subrows + 4 + n_rays * (n_rows - 1) + 1,
+        )
+        self.scene = pygame.Surface(screen_size.elementwise() * NODE_SIZE)
+        self.__draw()
+
+    def __create_lines(self, n_rows, n_columns, n_lines, n_subrows, n_rays):
+        # add line nodes
+        for row in range(n_rows):
+            for column in range(n_columns):
+                for innner_row in range(n_subrows):
+                    for innner_column in range(n_lines):
+                        line_node = LineNode(
+                            column * (n_lines + 1) + innner_column + 1,
+                            row * (n_subrows + n_rays) + innner_row + 2,
+                        )
+                        self.line_nodes[line_node.id] = line_node
+        # add palletize node
+        palletizer = LineNode(1, -1, True)
+        self.line_nodes[palletizer.id] = palletizer
+        # add link from ray to line
+        for ray_node in self.ray_nodes.values():
+            for line_node in self.line_nodes.values():
+                if (line_node.x == ray_node.x) and (line_node.y - ray_node.y == -1):
+                    ray_node.from_line = line_node
+                if (line_node.x == ray_node.x) and (line_node.y - ray_node.y == 1):
+                    ray_node.to_line = line_node
+        # add link between line nodes
+        for line_node1 in self.line_nodes.values():
+            for line_node2 in self.line_nodes.values():
+                if (line_node1.x == line_node2.x) and (
+                    line_node1.y - line_node2.y == 1
+                ):
+                    line_node2.next_node = line_node1
+
+    def __create_rays(self, n_rows, n_columns, n_lines, n_subrows, n_rays):
         self.ray_nodes = {}
         self.line_nodes = {}
-        direction: bool = False
-        line_begin_end = []
+        direction = False
+        line_begin_end: list[tuple[RayNode, RayNode]] = []
         # add horizontal edges
         for row in range(n_rows + 1):
             # double ray in first and last rays
             if row == 0:
                 for pair in range(0, 2):
                     line_begin_end.append(
-                        self.__add_horizontal_ray(
+                        self.__create_horizontal_ray(
                             (n_lines + 1) * n_columns + 1,
                             pair,
                             direction,
@@ -147,7 +216,7 @@ class WarehouseMap:
             elif row != n_rows:
                 for pair in range(0, n_rays):
                     line_begin_end.append(
-                        self.__add_horizontal_ray(
+                        self.__create_horizontal_ray(
                             (n_lines + 1) * n_columns + 1,
                             (n_subrows + n_rays) * row - n_rays + pair + 2,
                             direction,
@@ -157,45 +226,24 @@ class WarehouseMap:
             else:
                 for pair in range(0, 2):
                     line_begin_end.append(
-                        self.__add_horizontal_ray(
+                        self.__create_horizontal_ray(
                             (n_lines + 1) * n_columns + 1,
                             (n_subrows + n_rays) * row - n_rays + pair + 2,
                             direction,
                         )
                     )
                     direction = not direction
-
-        # add line nodes
-        for row in range(n_rows):
-            for column in range(n_columns):
-                for innner_row in range(n_subrows):
-                    for innner_column in range(n_lines):
-                        line_node = LineNode(
-                            column * (n_lines + 1) + innner_column + 1,
-                            row * (n_subrows + n_rays) + innner_row + 2,
-                            False,
-                        )
-                        self.line_nodes[line_node.id] = line_node
-
         # add vertical ray
         for i in range(len(line_begin_end) - 1):
-            self.__add_ray_edge(
+            self.__create_ray_edge(
                 line_begin_end[i][0], line_begin_end[i + 1][0], Direction.Down
             )
         for i in range(len(line_begin_end) - 1, 0, -1):
-            self.__add_ray_edge(
+            self.__create_ray_edge(
                 line_begin_end[i][1], line_begin_end[i - 1][1], Direction.Up
             )
 
-        # add link from ray to line
-        for ray_node in self.ray_nodes.values():
-            for line_node in self.line_nodes.values():
-                if (line_node.x == ray_node.x) and (line_node.y - ray_node.y == -1):
-                    ray_node.from_line = line_node
-                if (line_node.x == ray_node.x) and (line_node.y - ray_node.y == 1):
-                    ray_node.to_line = line_node
-
-    def __add_ray_edge(self, n1: RayNode, n2: RayNode, direction: Direction):
+    def __create_ray_edge(self, n1: RayNode, n2: RayNode, direction: Direction):
         self.ray_nodes.setdefault(n1.id, n1)
         self.ray_nodes.setdefault(n2.id, n2)
         n_1 = self.ray_nodes[n1.id]
@@ -211,27 +259,61 @@ class WarehouseMap:
         else:
             raise ValueError("No available direction.")
 
-    def __add_horizontal_ray(self, n_nodes, y, positive_direction: bool):
+    def __create_horizontal_ray(self, n_nodes: int, y: int, positive_direction: bool):
         if positive_direction:
             for x in range(n_nodes - 1):
-                self.__add_ray_edge(
-                    RayNode(x, y, False), RayNode(x + 1, y, False), Direction.Right
+                self.__create_ray_edge(
+                    RayNode(x, y), RayNode(x + 1, y), Direction.Right
                 )
         else:
             for x in range(n_nodes - 1, 0, -1):
-                self.__add_ray_edge(
-                    RayNode(x, y, False), RayNode(x - 1, y, False), Direction.Left
-                )
+                self.__create_ray_edge(RayNode(x, y), RayNode(x - 1, y), Direction.Left)
         return self.ray_nodes[f"0.{y}"], self.ray_nodes[f"{n_nodes - 1}.{y}"]
+
+    def __draw_arrow(
+        self,
+        color: Color,
+        start: Vector2,
+        end: Vector2,
+        width: int = 2,
+        arrow_size: float = 10,
+    ):
+        pygame.draw.line(self.scene, color, start, end, width)
+        dx = end.x - start.x
+        dy = end.y - start.y
+        angle = math.atan2(dy, dx)
+        left = (
+            end.x - arrow_size * math.cos(angle - math.pi / 6),
+            end.y - arrow_size * math.sin(angle - math.pi / 6),
+        )
+        right = (
+            end.x - arrow_size * math.cos(angle + math.pi / 6),
+            end.y - arrow_size * math.sin(angle + math.pi / 6),
+        )
+        pygame.draw.polygon(self.scene, color, (end, left, right))
+
+    def __draw(self):
+        self.scene.fill((255, 255, 255))
+        for ray_node in self.ray_nodes.values():
+            ray_node.draw(self.scene)
+        for line_node in self.line_nodes.values():
+            line_node.draw(self.scene)
+        for ray_node in self.ray_nodes.values():
+            for neighbor in ray_node.neighbors:
+                self.__draw_arrow(
+                    Color(168, 177, 179),
+                    ray_node.world_pos,
+                    neighbor.world_pos,
+                )
 
 
 class Warehouse:
-    agents: list[str]
+    # agents: list[str]
     robot: sprites.Shuttle
-    robot_sprites: pygame.sprite.Group
     map: WarehouseMap
-    screen_size: tuple[int, int]
-    background: pygame.Surface
+    robot_sprites: pygame.sprite.Group
+    parcel_sprites: pygame.sprite.Group
+    screen: pygame.Surface
     clock: pygame.time.Clock
     metadata: dict[str, Any] = {
         "render_modes": ["human"],
@@ -239,11 +321,10 @@ class Warehouse:
         "is_parallelizable": True,
         "render_fps": 20,
     }
-    screen: pygame.Surface | None
 
     def __init__(
         self,
-        n_robots: int,
+        # n_robots: int,
         n_rows: int,
         n_columns: int,
         n_lines: int,
@@ -251,60 +332,29 @@ class Warehouse:
         is_double_line: bool,
     ) -> None:
         # super().__init__()
-        self.agents = [f"a.{i}" for i in range(n_robots)]
+        # self.agents = [f"a.{i}" for i in range(n_robots)]
         n_rays: int = 2 if is_double_line else 1
         self.map = WarehouseMap(n_rows, n_columns, n_lines, n_subrows, n_rays)
-        self.screen_size = (
-            (n_lines + 1) * n_columns + 1,
-            n_rows * n_subrows + 4 + n_rays * (n_rows - 1),
-        )
-        self.robot = sprites.Shuttle(self.map.ray_nodes["0.0"])
         self.robot_sprites = pygame.sprite.Group()
+        self.parcel_sprites = pygame.sprite.Group()
+        self.robot = sprites.Shuttle(self.map.ray_nodes["2.0"], self.parcel_sprites)
         self.robot_sprites.add(self.robot)
-        self.robot_sprites.add(sprites.Shuttle(self.map.ray_nodes["4.1"]))
-        # draw a background
-        self.background = pygame.Surface(
-            (NODE_SIZE[0] * self.screen_size[0], NODE_SIZE[1] * self.screen_size[1])
-        )
-        self.background.fill((255, 255, 255))
-        # draw graph
-        for ray_node in self.map.ray_nodes.values():
-            ray_node.draw(self.background)
-        for line_node in self.map.line_nodes.values():
-            line_node.draw(self.background)
-        for node in self.map.ray_nodes.values():
-            for adjacent_node in node.adjacent:
-                draw_arrow(
-                    self.background,
-                    (168, 177, 179),
-                    node.world_pos,
-                    adjacent_node.world_pos,
-                )
+        parcel = sprites.Parcel(self.map.line_nodes[f"1.{-1}"])
+        self.parcel_sprites.add(parcel)
+        self.screen = pygame.display.set_mode(self.map.scene.get_size())
         self.clock = pygame.time.Clock()
-        self.screen = None
+        pygame.display.set_caption("WAREHOUSE")
 
     # def reset(self, seed: int | None = None, options: dict | None = None):
     #     return super().reset(seed, options)
 
     def step(self, action: sprites.Action):
-        self.robot.step(action)
-        # for smooth movement
-        for i in range(1, FRAME_PER_STEP + 1):
-            diff = tuple(
-                a - b
-                for a, b in zip(self.robot.next_rect.center, self.robot.rect.center)
-            )
-            self.robot.rect.center = tuple(
-                a + i / FRAME_PER_STEP * b for a, b in zip(self.robot.rect.center, diff)
-            )
-            self.render()
+        self.robot.step(action, self)
 
     def render(self):
-        if self.screen is None:
-            self.screen = pygame.display.set_mode(self.background.get_size())
-            pygame.display.set_caption("WAREHOUSE")
-        self.screen.blit(self.background, (0, 0))
+        self.screen.blit(self.map.scene, (0, 0))
         self.robot_sprites.draw(self.screen)
+        self.parcel_sprites.draw(self.screen)
         self.clock.tick(self.metadata["render_fps"])
         pygame.display.update()
 
@@ -313,8 +363,9 @@ class Warehouse:
 
 
 if __name__ == "__main__":
-    env = Warehouse(2, 3, 3, 5, 5, False)
+    env = Warehouse(3, 3, 5, 3, True)
     running = True
+    env.render()
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -328,5 +379,4 @@ if __name__ == "__main__":
                     env.step(sprites.Action.LEFT)
                 if event.key == pygame.K_d:
                     env.step(sprites.Action.RIGHT)
-        env.render()
     pygame.quit()
