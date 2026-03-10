@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import math
 from abc import ABC, abstractmethod
-from enum import Enum
 from typing import Any, override
 
 import pygame
@@ -11,18 +10,12 @@ from pygame.color import Color
 from pygame.math import Vector2
 
 from warehouse_rl import sprites
+from warehouse_rl.enums import Direction, RenderMode
 
 pygame.init()
 
 NODE_SIZE = Vector2(50, 30)
 FRAME_PER_STEP = 5
-
-
-class Direction(Enum):
-    Up = 1
-    Down = 2
-    Left = 3
-    Right = 4
 
 
 class Node(ABC):
@@ -146,27 +139,36 @@ class LineNode(Node):
 class WarehouseMap:
     ray_nodes: dict[str, RayNode]
     line_nodes: dict[str, LineNode]
-    scene: pygame.Surface
+    scene: pygame.Surface | None
 
     def __init__(
         self,
         n_rows: int,
         n_columns: int,
-        n_lines: int,
         n_subrows: int,
+        n_lines: int,
         n_rays: int,
+        render_mode: RenderMode = RenderMode.NoRender,
     ):
         assert n_rays in (1, 2)
-        self.__create_rays(n_rows, n_columns, n_lines, n_subrows, n_rays)
-        self.__create_lines(n_rows, n_columns, n_lines, n_subrows, n_rays)
-        screen_size = Vector2(
-            (n_lines + 1) * n_columns + 1,
-            n_rows * n_subrows + 4 + n_rays * (n_rows - 1) + 1,
-        )
-        self.scene = pygame.Surface(screen_size.elementwise() * NODE_SIZE)
-        self.__draw()
+        self.__create_rays(n_rows, n_columns, n_subrows, n_lines, n_rays)
+        self.__create_lines(n_rows, n_columns, n_subrows, n_lines, n_rays)
+        match render_mode:
+            case RenderMode.Human:
+                screen_size = Vector2(
+                    (n_lines + 1) * n_columns + 1,
+                    n_rows * n_subrows + 4 + n_rays * (n_rows - 1) + 1,
+                )
+                self.scene = pygame.Surface(screen_size.elementwise() * NODE_SIZE)
+                self.__draw()
+            case RenderMode.NoRender:
+                self.scene = None
+            case _:
+                raise ValueError(f"Invalid render_mode value: {render_mode}.")
 
-    def __create_lines(self, n_rows, n_columns, n_lines, n_subrows, n_rays):
+    def __create_lines(
+        self, n_rows: int, n_columns: int, n_subrows: int, n_lines: int, n_rays: int
+    ):
         # add line nodes
         for row in range(n_rows):
             for column in range(n_columns):
@@ -195,7 +197,9 @@ class WarehouseMap:
                 ):
                     line_node2.next_node = line_node1
 
-    def __create_rays(self, n_rows, n_columns, n_lines, n_subrows, n_rays):
+    def __create_rays(
+        self, n_rows: int, n_columns: int, n_subrows: int, n_lines: int, n_rays: int
+    ):
         self.ray_nodes = {}
         self.line_nodes = {}
         direction = False
@@ -248,16 +252,17 @@ class WarehouseMap:
         self.ray_nodes.setdefault(n2.id, n2)
         n_1 = self.ray_nodes[n1.id]
         n_2 = self.ray_nodes[n2.id]
-        if direction == Direction.Up:
-            n_1.up = n_2
-        elif direction == Direction.Down:
-            n_1.down = n_2
-        elif direction == Direction.Left:
-            n_1.left = n_2
-        elif direction == Direction.Right:
-            n_1.right = n_2
-        else:
-            raise ValueError("No available direction.")
+        match direction:
+            case Direction.Up:
+                n_1.up = n_2
+            case Direction.Down:
+                n_1.down = n_2
+            case Direction.Left:
+                n_1.left = n_2
+            case Direction.Right:
+                n_1.right = n_2
+            case _:
+                raise ValueError(f"Invalid direction value {direction}")
 
     def __create_horizontal_ray(self, n_nodes: int, y: int, positive_direction: bool):
         if positive_direction:
@@ -308,13 +313,13 @@ class WarehouseMap:
 
 
 class Warehouse:
-    # agents: list[str]
-    robot: sprites.Shuttle
     map: WarehouseMap
-    robot_sprites: pygame.sprite.Group
-    parcel_sprites: pygame.sprite.Group
-    screen: pygame.Surface
-    clock: pygame.time.Clock
+    robot: sprites.Shuttle
+    render_mode: RenderMode
+    robot_sprites: pygame.sprite.Group | None
+    parcel_sprites: pygame.sprite.Group | None
+    screen: pygame.Surface | None
+    clock: pygame.time.Clock | None
     metadata: dict[str, Any] = {
         "render_modes": ["human"],
         "name": "warehouse",
@@ -324,26 +329,37 @@ class Warehouse:
 
     def __init__(
         self,
-        # n_robots: int,
         n_rows: int,
         n_columns: int,
-        n_lines: int,
         n_subrows: int,
+        n_lines: int,
         is_double_line: bool,
+        render_mode: RenderMode = RenderMode.NoRender,
     ) -> None:
         # super().__init__()
-        # self.agents = [f"a.{i}" for i in range(n_robots)]
         n_rays: int = 2 if is_double_line else 1
-        self.map = WarehouseMap(n_rows, n_columns, n_lines, n_subrows, n_rays)
-        self.robot_sprites = pygame.sprite.Group()
-        self.parcel_sprites = pygame.sprite.Group()
-        self.robot = sprites.Shuttle(self.map.ray_nodes["2.0"], self.parcel_sprites)
-        self.robot_sprites.add(self.robot)
-        parcel = sprites.Parcel(self.map.line_nodes[f"1.{-1}"])
-        self.parcel_sprites.add(parcel)
-        self.screen = pygame.display.set_mode(self.map.scene.get_size())
-        self.clock = pygame.time.Clock()
-        pygame.display.set_caption("WAREHOUSE")
+        self.map = WarehouseMap(
+            n_rows, n_columns, n_subrows, n_lines, n_rays, render_mode
+        )
+        self.robot = sprites.Shuttle(self.map.ray_nodes["2.0"], render_mode)
+        parcel = sprites.Parcel(self.map.line_nodes[f"1.{-1}"], render_mode)
+        self.render_mode = render_mode
+        match render_mode:
+            case RenderMode.Human:
+                self.robot_sprites = pygame.sprite.Group()
+                self.parcel_sprites = pygame.sprite.Group()
+                self.robot_sprites.add(self.robot)
+                self.parcel_sprites.add(parcel)
+                self.screen = pygame.display.set_mode(self.map.scene.get_size())
+                self.clock = pygame.time.Clock()
+                pygame.display.set_caption("WAREHOUSE")
+            case RenderMode.NoRender:
+                self.robot_sprites = None
+                self.parcel_sprites = None
+                self.screen = None
+                self.clock = None
+            case _:
+                raise ValueError(f"Invalid render_mode value: {render_mode}.")
 
     # def reset(self, seed: int | None = None, options: dict | None = None):
     #     return super().reset(seed, options)
@@ -363,7 +379,7 @@ class Warehouse:
 
 
 if __name__ == "__main__":
-    env = Warehouse(3, 3, 5, 3, True)
+    env = Warehouse(3, 3, 3, 5, True, RenderMode.Human)
     running = True
     env.render()
     while running:
@@ -372,11 +388,11 @@ if __name__ == "__main__":
                 running = False
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_w:
-                    env.step(sprites.Action.UP)
+                    env.step(sprites.Action.Up)
                 if event.key == pygame.K_s:
-                    env.step(sprites.Action.DOWN)
+                    env.step(sprites.Action.Down)
                 if event.key == pygame.K_a:
-                    env.step(sprites.Action.LEFT)
+                    env.step(sprites.Action.Left)
                 if event.key == pygame.K_d:
-                    env.step(sprites.Action.RIGHT)
+                    env.step(sprites.Action.Right)
     pygame.quit()

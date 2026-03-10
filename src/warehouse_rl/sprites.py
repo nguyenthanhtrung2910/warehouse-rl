@@ -1,24 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
 
 import numpy as np
 import pygame
 from pygame.math import Vector2
 
+from warehouse_rl.enums import Action, RenderMode
 from warehouse_rl.warehouse import NODE_SIZE, LineNode, RayNode, Warehouse
 
-DEFAULT_REWARD = 0
+DEFAULT_REWARD = -0.1
+PICKUP_REWARD = 1
+DROPOFF_REWARD = 5
 FRAME_PER_STEP = 5
-
-
-class Action(Enum):
-    # NONE = 0
-    UP = 1
-    DOWN = 2
-    LEFT = 3
-    RIGHT = 4
 
 
 @dataclass
@@ -30,50 +24,61 @@ class StepResult:
 class Shuttle(pygame.sprite.Sprite):
     pos: RayNode
     parcel: Parcel | None
-    image: pygame.Surface
-    rect: pygame.Rect
-    parcel_sprites: pygame.sprite.Group
+    render_mode: RenderMode
+    image: pygame.Surface | None
+    rect: pygame.Rect | None
 
-    def __init__(self, pos: RayNode, parcel_sprites: pygame.sprite.Group):
+    def __init__(
+        self,
+        pos: RayNode,
+        render_mode: RenderMode = RenderMode.NoRender,
+    ):
         super().__init__()
         self.pos = pos
         self.pos.robot = self
         self.parcel = None
-        self.__set_image()
-        self.rect = self.image.get_rect()
-        self.rect.center = self.pos.world_pos
-        self.parcel_sprites = parcel_sprites
-
-    def __set_image(self):
-        self.image = pygame.Surface(NODE_SIZE, pygame.SRCALPHA)
-        pygame.draw.circle(
-            self.image,
-            (255, 0, 0),
-            NODE_SIZE / 2,
-            min(NODE_SIZE) / 2,
-        )
+        self.render_mode = render_mode
+        match render_mode:
+            case RenderMode.Human:
+                self.image = pygame.Surface(NODE_SIZE, pygame.SRCALPHA)
+                pygame.draw.circle(
+                    self.image,
+                    (255, 0, 0),
+                    NODE_SIZE / 2,
+                    min(NODE_SIZE) / 2,
+                )
+                self.rect = self.image.get_rect()
+                self.rect.center = self.pos.world_pos
+            case RenderMode.NoRender:
+                self.image = None
+                self.rect = None
+            case _:
+                raise ValueError(f"Invalid render_mode value {render_mode}")
 
     def __is_legal_move(self, act: Action):
-        if act == Action.UP:
-            if not self.pos.up:
-                return False
-            if self.pos.up.robot:
-                return False
-        if act == Action.DOWN:
-            if not self.pos.down:
-                return False
-            if self.pos.down.robot:
-                return False
-        if act == Action.LEFT:
-            if not self.pos.left:
-                return False
-            if self.pos.left.robot:
-                return False
-        if act == Action.RIGHT:
-            if not self.pos.right:
-                return False
-            if self.pos.right.robot:
-                return False
+        match act:
+            case Action.Up:
+                if not self.pos.up:
+                    return False
+                if self.pos.up.robot:
+                    return False
+            case Action.Down:
+                if not self.pos.down:
+                    return False
+                if self.pos.down.robot:
+                    return False
+            case Action.Left:
+                if not self.pos.left:
+                    return False
+                if self.pos.left.robot:
+                    return False
+            case Action.Right:
+                if not self.pos.right:
+                    return False
+                if self.pos.right.robot:
+                    return False
+            case _:
+                raise ValueError(f"Invalid action value {act}.")
         return True
 
     @property
@@ -92,31 +97,26 @@ class Shuttle(pygame.sprite.Sprite):
         self.pos.robot = None
         self.pos = self.pos.up
         self.pos.robot = self
-        return DEFAULT_REWARD
 
     def move_down(self):
         self.pos.robot = None
         self.pos = self.pos.down
         self.pos.robot = self
-        return DEFAULT_REWARD
 
     def move_left(self):
         self.pos.robot = None
         self.pos = self.pos.left
         self.pos.robot = self
-        return DEFAULT_REWARD
 
     def move_right(self):
         self.pos.robot = None
         self.pos = self.pos.right
         self.pos.robot = self
-        return DEFAULT_REWARD
 
     def pick_up(self):
         if self.pos.from_line and self.pos.from_line.isPalletize and not self.parcel:
             self.parcel = self.pos.from_line.parcel
-            self.pos.from_line.parcel = Parcel(self.pos.from_line)
-            self.parcel_sprites.add(self.pos.from_line.parcel)
+            self.pos.from_line.parcel = Parcel(self.pos.from_line, self.render_mode)
             return self.pos.from_line
         return None
 
@@ -133,40 +133,51 @@ class Shuttle(pygame.sprite.Sprite):
             return current
         return None
 
-    def step(self, action: int, renderer: Warehouse | None = None):
+    def step(self, action: int, renderer: Warehouse):
         # check if action is legal
         # actually, action from agent always is legal because of action mask
         # we check for case that all actions are illegal
+        reward = DEFAULT_REWARD
         is_action_legal = self.__is_legal_move(action)
         if not is_action_legal:
             # if no action is legal, do nothing
-            return StepResult(False, DEFAULT_REWARD)
-        reward = 0
-        if action == Action.UP:
-            reward = self.move_up()
-        elif action == Action.DOWN:
-            reward = self.move_down()
-        elif action == Action.LEFT:
-            reward = self.move_left()
-        elif action == Action.RIGHT:
-            reward = self.move_right()
-        else:
-            raise ValueError("Invalid input action.")
-        if renderer:
+            return StepResult(False, reward)
+        match action:
+            case Action.Up:
+                self.move_up()
+            case Action.Down:
+                self.move_down()
+            case Action.Left:
+                self.move_left()
+            case Action.Right:
+                self.move_right()
+            case _:
+                raise ValueError(f"Invalid action value {action}.")
+        # simulate movement
+        if self.render_mode == RenderMode.Human:
             diff = Vector2(self.next_rect.center) - self.rect.center
             for _ in range(0, FRAME_PER_STEP):
                 self.rect.move_ip(diff / FRAME_PER_STEP)
                 if self.parcel:
                     self.parcel.rect.move_ip(diff / FRAME_PER_STEP)
                 renderer.render()
-            line_node = self.pick_up()
-            if line_node:
+        # try to pick up
+        line_node = self.pick_up()
+        if line_node:
+            reward = PICKUP_REWARD
+            # simulate pick up
+            if self.render_mode == RenderMode.Human:
                 diff = self.rect.center - line_node.world_pos
                 for _ in range(0, FRAME_PER_STEP):
                     self.parcel.rect.move_ip(diff / FRAME_PER_STEP)
                     renderer.render()
-            line_node = self.drop_off()
-            if line_node:
+                renderer.parcel_sprites.add(self.pos.from_line.parcel)
+        # try to drop off
+        line_node = self.drop_off()
+        if line_node:
+            reward = DROPOFF_REWARD
+            # simulate drop off
+            if self.render_mode == RenderMode.Human:
                 diff = line_node.world_pos - self.rect.center
                 for _ in range(0, FRAME_PER_STEP):
                     line_node.parcel.rect.move_ip(diff / FRAME_PER_STEP)
@@ -175,18 +186,27 @@ class Shuttle(pygame.sprite.Sprite):
 
 
 class Parcel(pygame.sprite.Sprite):
-    image: pygame.Surface
-    rect: pygame.Rect
+    image: pygame.Surface | None
+    rect: pygame.Rect | None
 
-    def __init__(self, pos: LineNode) -> None:
+    def __init__(
+        self, pos: LineNode, render_mode: RenderMode = RenderMode.NoRender
+    ) -> None:
         super().__init__()
         pos.parcel = self
-        self.image = pygame.Surface(NODE_SIZE, pygame.SRCALPHA)
-        pygame.draw.circle(
-            self.image,
-            (0, 255, 0),
-            NODE_SIZE / 2,
-            min(NODE_SIZE) / 4,
-        )
-        self.rect = self.image.get_rect()
-        self.rect.center = pos.world_pos
+        match render_mode:
+            case RenderMode.Human:
+                self.image = pygame.Surface(NODE_SIZE, pygame.SRCALPHA)
+                pygame.draw.circle(
+                    self.image,
+                    (0, 255, 0),
+                    NODE_SIZE / 2,
+                    min(NODE_SIZE) / 4,
+                )
+                self.rect = self.image.get_rect()
+                self.rect.center = pos.world_pos
+            case RenderMode.NoRender:
+                self.image = None
+                self.rect = None
+            case _:
+                raise ValueError(f"Invalid render_mode value {render_mode}")
