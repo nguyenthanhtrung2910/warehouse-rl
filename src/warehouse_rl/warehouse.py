@@ -1,16 +1,20 @@
-# from pettingzoo import ParallelEnv
 from __future__ import annotations
 
 import math
 from abc import ABC, abstractmethod
+from csv import Error
+import random
 from typing import Any, override
 
+import numpy as np
+import numpy.typing as npt
 import pygame
+from gymnasium.core import Env
 from pygame.color import Color
 from pygame.math import Vector2
 
 from warehouse_rl import sprites
-from warehouse_rl.enums import Direction, RenderMode
+from warehouse_rl.enums import Action, Direction, RenderMode
 
 pygame.init()
 
@@ -137,6 +141,8 @@ class LineNode(Node):
 
 
 class WarehouseMap:
+    __map_size: Vector2
+    __n_line_nodes: int
     ray_nodes: dict[str, RayNode]
     line_nodes: dict[str, LineNode]
     scene: pygame.Surface | None
@@ -153,6 +159,11 @@ class WarehouseMap:
         assert n_rays in (1, 2)
         self.__create_rays(n_rows, n_columns, n_subrows, n_lines, n_rays)
         self.__create_lines(n_rows, n_columns, n_subrows, n_lines, n_rays)
+        self.__map_size = Vector2(
+            (n_lines + 1) * n_columns + 1,
+            n_rows * n_subrows + 4 + n_rays * (n_rows - 1),
+        )
+        self.__n_line_nodes = n_rows * n_columns * n_subrows * n_lines
         match render_mode:
             case RenderMode.Human:
                 screen_size = Vector2(
@@ -160,11 +171,19 @@ class WarehouseMap:
                     n_rows * n_subrows + 4 + n_rays * (n_rows - 1) + 1,
                 )
                 self.scene = pygame.Surface(screen_size.elementwise() * NODE_SIZE)
-                self.__draw()
             case RenderMode.NoRender:
                 self.scene = None
             case _:
                 raise ValueError(f"Invalid render_mode value: {render_mode}.")
+        self.__draw()
+
+    @property
+    def map_size(self):
+        return self.__map_size
+
+    @property
+    def n_line_nodes(self):
+        return self.__n_line_nodes
 
     def __create_lines(
         self, n_rows: int, n_columns: int, n_subrows: int, n_lines: int, n_rays: int
@@ -283,41 +302,46 @@ class WarehouseMap:
         width: int = 2,
         arrow_size: float = 10,
     ):
-        pygame.draw.line(self.scene, color, start, end, width)
-        dx = end.x - start.x
-        dy = end.y - start.y
-        angle = math.atan2(dy, dx)
-        left = (
-            end.x - arrow_size * math.cos(angle - math.pi / 6),
-            end.y - arrow_size * math.sin(angle - math.pi / 6),
-        )
-        right = (
-            end.x - arrow_size * math.cos(angle + math.pi / 6),
-            end.y - arrow_size * math.sin(angle + math.pi / 6),
-        )
-        pygame.draw.polygon(self.scene, color, (end, left, right))
+        if self.scene:
+            pygame.draw.line(self.scene, color, start, end, width)
+            dx = end.x - start.x
+            dy = end.y - start.y
+            angle = math.atan2(dy, dx)
+            left = (
+                end.x - arrow_size * math.cos(angle - math.pi / 6),
+                end.y - arrow_size * math.sin(angle - math.pi / 6),
+            )
+            right = (
+                end.x - arrow_size * math.cos(angle + math.pi / 6),
+                end.y - arrow_size * math.sin(angle + math.pi / 6),
+            )
+            pygame.draw.polygon(self.scene, color, (end, left, right))
 
     def __draw(self):
-        self.scene.fill((255, 255, 255))
-        for ray_node in self.ray_nodes.values():
-            ray_node.draw(self.scene)
-        for line_node in self.line_nodes.values():
-            line_node.draw(self.scene)
-        for ray_node in self.ray_nodes.values():
-            for neighbor in ray_node.neighbors:
-                self.__draw_arrow(
-                    Color(168, 177, 179),
-                    ray_node.world_pos,
-                    neighbor.world_pos,
-                )
+        if self.scene:
+            self.scene.fill((255, 255, 255))
+            for ray_node in self.ray_nodes.values():
+                ray_node.draw(self.scene)
+            for line_node in self.line_nodes.values():
+                line_node.draw(self.scene)
+            for ray_node in self.ray_nodes.values():
+                for neighbor in ray_node.neighbors:
+                    self.__draw_arrow(
+                        Color(168, 177, 179),
+                        ray_node.world_pos,
+                        neighbor.world_pos,
+                    )
 
 
-class Warehouse:
+class Warehouse(Env[dict[str, npt.NDArray[np.float32] | npt.NDArray[np.uint8]], int]):
+    __n_steps: int
+    n_parcels: int
+    max_step: int
     map: WarehouseMap
     robot: sprites.Shuttle
     render_mode: RenderMode
-    robot_sprites: pygame.sprite.Group | None
-    parcel_sprites: pygame.sprite.Group | None
+    robot_sprites: pygame.sprite.Group | None  # type: ignore
+    parcel_sprites: pygame.sprite.Group | None  # type: ignore
     screen: pygame.Surface | None
     clock: pygame.time.Clock | None
     metadata: dict[str, Any] = {
@@ -334,23 +358,30 @@ class Warehouse:
         n_subrows: int,
         n_lines: int,
         is_double_line: bool,
+        max_step: int,
         render_mode: RenderMode = RenderMode.NoRender,
     ) -> None:
-        # super().__init__()
+        super().__init__()
+        self.__n_steps = 0
+        self.n_parcels = 0
         n_rays: int = 2 if is_double_line else 1
         self.map = WarehouseMap(
             n_rows, n_columns, n_subrows, n_lines, n_rays, render_mode
         )
-        self.robot = sprites.Shuttle(self.map.ray_nodes["2.0"], render_mode)
+        self.robot = sprites.Shuttle(
+            self.map.ray_nodes["2.0"], self.map.map_size, render_mode
+        )
         parcel = sprites.Parcel(self.map.line_nodes[f"1.{-1}"], render_mode)
-        self.render_mode = render_mode
+        self.max_step = max_step
+        self.render_mode = render_mode  # type: ignore
         match render_mode:
             case RenderMode.Human:
                 self.robot_sprites = pygame.sprite.Group()
                 self.parcel_sprites = pygame.sprite.Group()
-                self.robot_sprites.add(self.robot)
-                self.parcel_sprites.add(parcel)
-                self.screen = pygame.display.set_mode(self.map.scene.get_size())
+                self.robot_sprites.add(self.robot)  # type: ignore
+                self.parcel_sprites.add(parcel)  # type: ignore
+                if self.map.scene:
+                    self.screen = pygame.display.set_mode(self.map.scene.get_size())
                 self.clock = pygame.time.Clock()
                 pygame.display.set_caption("WAREHOUSE")
             case RenderMode.NoRender:
@@ -361,38 +392,83 @@ class Warehouse:
             case _:
                 raise ValueError(f"Invalid render_mode value: {render_mode}.")
 
-    # def reset(self, seed: int | None = None, options: dict | None = None):
-    #     return super().reset(seed, options)
+    @override
+    def reset(
+        self,
+        *,
+        seed: int | None = None,
+        options: dict[str, Any] | None = None,
+    ):
+        self.__n_steps = 0
+        self.n_parcel = 0
+        self.robot.reset(self.map.ray_nodes["2.0"])
+        for line_node in self.map.line_nodes.values():
+            line_node.parcel = None
+        parcel = sprites.Parcel(self.map.line_nodes[f"1.{-1}"], self.render_mode)
+        if self.render_mode == RenderMode.Human:
+            for s in self.parcel_sprites:  # type: ignore
+                s.kill()  # type: ignore
+            self.parcel_sprites.add(parcel)  # type: ignore
+            self.render()
 
-    def step(self, action: sprites.Action):
-        self.robot.step(action, self)
+        observation: dict[str, npt.NDArray[np.float32] | npt.NDArray[np.uint8]] = {
+            "observation": self.robot.observation,
+            "mask": self.robot.mask,
+        }
+        info: dict[str, Any] = {}
+        return observation, info
 
+    @override
+    def step(self, action: int):
+        termination = self.n_parcels == self.map.n_line_nodes
+        truncation = self.__n_steps == self.max_step
+        if termination or truncation:
+            raise Error("The environment has ended.")
+        reward = self.robot.step(Action(action), self)
+        observation: dict[str, npt.NDArray[np.float32] | npt.NDArray[np.uint8]] = {
+            "observation": self.robot.observation,
+            "mask": self.robot.mask,
+        }
+        termination = self.n_parcels == self.map.n_line_nodes
+        truncation = self.__n_steps == self.max_step
+        info: dict[str, Any] = {}
+        return observation, reward, termination, truncation, info
+
+    @override
     def render(self):
-        self.screen.blit(self.map.scene, (0, 0))
-        self.robot_sprites.draw(self.screen)
-        self.parcel_sprites.draw(self.screen)
-        self.clock.tick(self.metadata["render_fps"])
+        self.screen.blit(self.map.scene, (0, 0))  # type: ignore
+        self.robot_sprites.draw(self.screen)  # type: ignore
+        self.parcel_sprites.draw(self.screen)  # type: ignore
+        self.clock.tick(self.metadata["render_fps"])  # type: ignore
         pygame.display.update()
-
-    # def close(self):
-    #     return super().close()
 
 
 if __name__ == "__main__":
-    env = Warehouse(3, 3, 3, 5, True, RenderMode.Human)
+    env = Warehouse(3, 3, 3, 3, True, 300, RenderMode.Human)
     running = True
-    env.render()
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_w:
-                    env.step(sprites.Action.Up)
-                if event.key == pygame.K_s:
-                    env.step(sprites.Action.Down)
-                if event.key == pygame.K_a:
-                    env.step(sprites.Action.Left)
-                if event.key == pygame.K_d:
-                    env.step(sprites.Action.Right)
+    obs, _ = env.reset()
+    for i in range(500):
+        action_mask = obs["mask"]
+        legal_actions = [i + 1 for i, v in enumerate(action_mask) if v]
+        action = random.choice(legal_actions)
+        obs, _, _, _, _ = env.step(action)
+
+    # env.render()
+    # while running:
+    #     for event in pygame.event.get():
+    #         if event.type == pygame.QUIT:
+    #             running = False
+    #         if event.type == pygame.KEYDOWN:
+    #             if event.key == pygame.K_r:
+    #                 env.reset()
+    #             if event.key == pygame.K_w:
+    #                 env.step(sprites.Action.Up)
+    #             if event.key == pygame.K_w:
+    #                 env.step(sprites.Action.Up)
+    #             if event.key == pygame.K_s:
+    #                 env.step(sprites.Action.Down)
+    #             if event.key == pygame.K_a:
+    #                 env.step(sprites.Action.Left)
+    #             if event.key == pygame.K_d:
+    #                 env.step(sprites.Action.Right)
     pygame.quit()

@@ -22,6 +22,7 @@ class StepResult:
 
 
 class Shuttle(pygame.sprite.Sprite):
+    __map_size: Vector2
     pos: RayNode
     parcel: Parcel | None
     render_mode: RenderMode
@@ -31,9 +32,11 @@ class Shuttle(pygame.sprite.Sprite):
     def __init__(
         self,
         pos: RayNode,
+        map_size: Vector2,
         render_mode: RenderMode = RenderMode.NoRender,
     ):
         super().__init__()
+        self.__map_size = map_size
         self.pos = pos
         self.pos.robot = self
         self.parcel = None
@@ -48,7 +51,7 @@ class Shuttle(pygame.sprite.Sprite):
                     min(NODE_SIZE) / 2,
                 )
                 self.rect = self.image.get_rect()
-                self.rect.center = self.pos.world_pos
+                self.rect.center = self.pos.world_pos  # type: ignore
             case RenderMode.NoRender:
                 self.image = None
                 self.rect = None
@@ -82,9 +85,11 @@ class Shuttle(pygame.sprite.Sprite):
         return True
 
     @property
-    def next_rect(self) -> pygame.Rect:
-        rect = self.image.get_rect()
-        rect.center = self.pos.world_pos
+    def next_rect(self):
+        rect = None
+        if self.image:
+            rect = self.image.get_rect()
+            rect.center = self.pos.world_pos  # type: ignore
         return rect
 
     @property
@@ -93,24 +98,36 @@ class Shuttle(pygame.sprite.Sprite):
             [self.__is_legal_move(action) for action in Action], dtype=np.uint8
         )
 
+    @property
+    def observation(self):
+        has_parcel = 1 if self.parcel else 0
+        return np.array(
+            [
+                self.pos.x / self.__map_size.x,
+                self.pos.y / self.__map_size.y,
+                has_parcel,
+            ],
+            dtype=np.float32,
+        )
+
     def move_up(self):
         self.pos.robot = None
-        self.pos = self.pos.up
+        self.pos = self.pos.up  # type: ignore
         self.pos.robot = self
 
     def move_down(self):
         self.pos.robot = None
-        self.pos = self.pos.down
+        self.pos = self.pos.down  # type: ignore
         self.pos.robot = self
 
     def move_left(self):
         self.pos.robot = None
-        self.pos = self.pos.left
+        self.pos = self.pos.left  # type: ignore
         self.pos.robot = self
 
     def move_right(self):
         self.pos.robot = None
-        self.pos = self.pos.right
+        self.pos = self.pos.right  # type: ignore
         self.pos.robot = self
 
     def pick_up(self):
@@ -133,7 +150,15 @@ class Shuttle(pygame.sprite.Sprite):
             return current
         return None
 
-    def step(self, action: int, renderer: Warehouse):
+    def reset(self, pos: RayNode):
+        self.pos.robot = None
+        self.pos = pos
+        self.pos.robot = self
+        self.parcel = None
+        if self.rect:
+            self.rect = self.next_rect
+
+    def step(self, action: Action, renderer: Warehouse):
         # check if action is legal
         # actually, action from agent always is legal because of action mask
         # we check for case that all actions are illegal
@@ -141,7 +166,7 @@ class Shuttle(pygame.sprite.Sprite):
         is_action_legal = self.__is_legal_move(action)
         if not is_action_legal:
             # if no action is legal, do nothing
-            return StepResult(False, reward)
+            return 0
         match action:
             case Action.Up:
                 self.move_up()
@@ -155,11 +180,11 @@ class Shuttle(pygame.sprite.Sprite):
                 raise ValueError(f"Invalid action value {action}.")
         # simulate movement
         if self.render_mode == RenderMode.Human:
-            diff = Vector2(self.next_rect.center) - self.rect.center
+            diff = Vector2(self.next_rect.center) - self.rect.center  # type: ignore
             for _ in range(0, FRAME_PER_STEP):
-                self.rect.move_ip(diff / FRAME_PER_STEP)
+                self.rect.move_ip(diff / FRAME_PER_STEP)  # type: ignore
                 if self.parcel:
-                    self.parcel.rect.move_ip(diff / FRAME_PER_STEP)
+                    self.parcel.rect.move_ip(diff / FRAME_PER_STEP)  # type: ignore
                 renderer.render()
         # try to pick up
         line_node = self.pick_up()
@@ -167,22 +192,23 @@ class Shuttle(pygame.sprite.Sprite):
             reward = PICKUP_REWARD
             # simulate pick up
             if self.render_mode == RenderMode.Human:
-                diff = self.rect.center - line_node.world_pos
+                diff = self.rect.center - line_node.world_pos  # type: ignore
                 for _ in range(0, FRAME_PER_STEP):
-                    self.parcel.rect.move_ip(diff / FRAME_PER_STEP)
+                    self.parcel.rect.move_ip(diff / FRAME_PER_STEP)  # type: ignore
                     renderer.render()
-                renderer.parcel_sprites.add(self.pos.from_line.parcel)
+                renderer.parcel_sprites.add(self.pos.from_line.parcel)  # type: ignore
         # try to drop off
         line_node = self.drop_off()
         if line_node:
             reward = DROPOFF_REWARD
+            renderer.n_parcels += 1
             # simulate drop off
             if self.render_mode == RenderMode.Human:
-                diff = line_node.world_pos - self.rect.center
+                diff = line_node.world_pos - self.rect.center  # type: ignore
                 for _ in range(0, FRAME_PER_STEP):
-                    line_node.parcel.rect.move_ip(diff / FRAME_PER_STEP)
+                    line_node.parcel.rect.move_ip(diff / FRAME_PER_STEP)  # type: ignore
                     renderer.render()
-        return StepResult(True, reward)
+        return reward
 
 
 class Parcel(pygame.sprite.Sprite):
@@ -204,7 +230,7 @@ class Parcel(pygame.sprite.Sprite):
                     min(NODE_SIZE) / 4,
                 )
                 self.rect = self.image.get_rect()
-                self.rect.center = pos.world_pos
+                self.rect.center = pos.world_pos  # type: ignore
             case RenderMode.NoRender:
                 self.image = None
                 self.rect = None
