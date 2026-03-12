@@ -7,6 +7,7 @@ from csv import Error
 from dataclasses import dataclass
 from typing import Any, override
 
+from gymnasium import spaces
 import numpy as np
 import numpy.typing as npt
 import pygame
@@ -15,11 +16,10 @@ from pygame.color import Color
 from pygame.math import Vector2
 
 from warehouse_rl import sprites
-from warehouse_rl.enums import Action, Direction, RenderMode
+from warehouse_rl.enums import Action, Direction, RenderMode, NODE_SIZE
 
 pygame.init()
 
-NODE_SIZE = Vector2(50, 30)
 FRAME_PER_STEP = 5
 
 
@@ -340,7 +340,7 @@ class Obsevation:
     mask: npt.NDArray[np.uint8]
 
 
-class Warehouse(Env[Obsevation, int]):
+class Warehouse(Env[npt.NDArray[np.float32], int]):
     __n_steps: int
     n_parcels: int
     max_step: int
@@ -378,6 +378,8 @@ class Warehouse(Env[Obsevation, int]):
         )
         _ = sprites.Parcel(self.map.line_nodes[f"1.{-1}"], render_mode)
         self.max_step = max_step
+        self.action_space = spaces.Discrete(4)
+        self.observation_space = spaces.Box(low=0, high=1, shape=(3,), dtype=np.float32)
         self.render_mode = render_mode  # type: ignore
         match render_mode:
             case RenderMode.Human:
@@ -405,8 +407,8 @@ class Warehouse(Env[Obsevation, int]):
             line_node.parcel = None
         _ = sprites.Parcel(self.map.line_nodes[f"1.{-1}"], self.render_mode)
         self.render()
-        observation = Obsevation(self.shuttle.observation, self.shuttle.mask)
-        info: dict[str, Any] = {}
+        observation = self.shuttle.observation
+        info: dict[str, Any] = {"mask": self.shuttle.mask}
         return observation, info
 
     @override
@@ -417,10 +419,10 @@ class Warehouse(Env[Obsevation, int]):
             raise Error("The environment has ended.")
         reward = self.shuttle.step(Action(action), self)
         self.__n_steps += 1
-        observation = Obsevation(self.shuttle.observation, self.shuttle.mask)
+        observation = self.shuttle.observation
         termination = self.n_parcels == self.map.n_line_nodes
         truncation = self.__n_steps == self.max_step
-        info: dict[str, Any] = {}
+        info: dict[str, Any] = {"mask": self.shuttle.mask}
         return observation, reward, termination, truncation, info
 
     @override
@@ -438,7 +440,7 @@ class Warehouse(Env[Obsevation, int]):
 if __name__ == "__main__":
     env = Warehouse(2, 2, 2, 2, True, 700, RenderMode.Human)
     running = True
-    obs, _ = env.reset()
+    obs, info = env.reset()
     for i in range(700):
         if not running:
             break
@@ -448,10 +450,10 @@ if __name__ == "__main__":
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_r:
                     env.reset()
-        action_mask = obs.mask
-        legal_actions = [i + 1 for i, v in enumerate(action_mask) if v]
+        action_mask = info["mask"]
+        legal_actions = [i for i, v in enumerate(action_mask) if v]
         action = random.choice(legal_actions)
-        obs, reward, termination, truncation, _ = env.step(action)
+        obs, reward, termination, truncation, info = env.step(action)
         print(
             f"In step {i}: reward {reward} termination {termination} truncation {truncation}"
         )
@@ -465,11 +467,11 @@ if __name__ == "__main__":
     #             if event.key == pygame.K_r:
     #                 env.reset()
     #             if event.key == pygame.K_w:
-    #                 env.step(1)
+    #                 env.step(0)
     #             if event.key == pygame.K_s:
-    #                 env.step(2)
+    #                 env.step(1)
     #             if event.key == pygame.K_a:
-    #                 env.step(3)
+    #                 env.step(2)
     #             if event.key == pygame.K_d:
-    #                 env.step(4)
+    #                 env.step(3)
     pygame.quit()

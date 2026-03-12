@@ -6,8 +6,8 @@ import numpy as np
 import pygame
 from pygame.math import Vector2
 
-from warehouse_rl.enums import Action, RenderMode
-from warehouse_rl.warehouse import NODE_SIZE, LineNode, RayNode, Warehouse
+from warehouse_rl.enums import Action, RenderMode, NODE_SIZE
+from warehouse_rl import warehouse
 
 DEFAULT_REWARD = -0.1
 PICKUP_REWARD = 1
@@ -23,7 +23,7 @@ class StepResult:
 
 class Shuttle:
     __map_size: Vector2
-    pos: RayNode
+    pos: warehouse.RayNode
     parcel: Parcel | None
     render_mode: RenderMode
     image: pygame.Surface | None
@@ -31,7 +31,7 @@ class Shuttle:
 
     def __init__(
         self,
-        pos: RayNode,
+        pos: warehouse.RayNode,
         map_size: Vector2,
         render_mode: RenderMode = RenderMode.NoRender,
     ):
@@ -102,8 +102,8 @@ class Shuttle:
         has_parcel = 1 if self.parcel else 0
         return np.array(
             [
-                self.pos.x / self.__map_size.x,
-                self.pos.y / self.__map_size.y,
+                self.pos.x,
+                self.pos.y,
                 has_parcel,
             ],
             dtype=np.float32,
@@ -149,7 +149,7 @@ class Shuttle:
             return current
         return None
 
-    def reset(self, pos: RayNode):
+    def reset(self, pos: warehouse.RayNode):
         self.pos.robot = None
         self.pos = pos
         self.pos.robot = self
@@ -157,7 +157,7 @@ class Shuttle:
         if self.rect:
             self.rect = self.next_rect
 
-    def step(self, action: Action, renderer: Warehouse):
+    def step(self, action: Action, renderer: warehouse.Warehouse):
         # check if action is legal
         # actually, action from agent always is legal because of action mask
         # we check for case that all actions are illegal
@@ -219,7 +219,7 @@ class Parcel:
     image: pygame.Surface | None
     rect: pygame.Rect | None
 
-    def __init__(self, pos: LineNode, render_mode: RenderMode = RenderMode.NoRender):
+    def __init__(self, pos: warehouse.LineNode, render_mode: RenderMode = RenderMode.NoRender):
         pos.parcel = self
         match render_mode:
             case RenderMode.Human:
