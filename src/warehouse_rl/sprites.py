@@ -21,7 +21,7 @@ class StepResult:
     reward: float
 
 
-class Shuttle(pygame.sprite.Sprite):
+class Shuttle:
     __map_size: Vector2
     pos: RayNode
     parcel: Parcel | None
@@ -35,7 +35,6 @@ class Shuttle(pygame.sprite.Sprite):
         map_size: Vector2,
         render_mode: RenderMode = RenderMode.NoRender,
     ):
-        super().__init__()
         self.__map_size = map_size
         self.pos = pos
         self.pos.robot = self
@@ -196,7 +195,6 @@ class Shuttle(pygame.sprite.Sprite):
                 for _ in range(0, FRAME_PER_STEP):
                     self.parcel.rect.move_ip(diff / FRAME_PER_STEP)  # type: ignore
                     renderer.render()
-                renderer.parcel_sprites.add(self.pos.from_line.parcel)  # type: ignore
         # try to drop off
         line_node = self.drop_off()
         if line_node:
@@ -210,15 +208,18 @@ class Shuttle(pygame.sprite.Sprite):
                     renderer.render()
         return reward
 
+    def draw(self, screen: pygame.Surface):
+        if self.image and self.rect:
+            screen.blit(self.image, self.rect)
+            if self.parcel:
+                self.parcel.draw(screen)
 
-class Parcel(pygame.sprite.Sprite):
+
+class Parcel:
     image: pygame.Surface | None
     rect: pygame.Rect | None
 
-    def __init__(
-        self, pos: LineNode, render_mode: RenderMode = RenderMode.NoRender
-    ) -> None:
-        super().__init__()
+    def __init__(self, pos: LineNode, render_mode: RenderMode = RenderMode.NoRender):
         pos.parcel = self
         match render_mode:
             case RenderMode.Human:
@@ -236,3 +237,7 @@ class Parcel(pygame.sprite.Sprite):
                 self.rect = None
             case _:
                 raise ValueError(f"Invalid render_mode value {render_mode}")
+
+    def draw(self, screen: pygame.Surface):
+        if self.image and self.rect:
+            screen.blit(self.image, self.rect)

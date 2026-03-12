@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import math
+import random
 from abc import ABC, abstractmethod
 from csv import Error
-import random
+from dataclasses import dataclass
 from typing import Any, override
 
 import numpy as np
@@ -333,15 +334,19 @@ class WarehouseMap:
                     )
 
 
-class Warehouse(Env[dict[str, npt.NDArray[np.float32] | npt.NDArray[np.uint8]], int]):
+@dataclass
+class Obsevation:
+    shuttle_state: npt.NDArray[np.float32]
+    mask: npt.NDArray[np.uint8]
+
+
+class Warehouse(Env[Obsevation, int]):
     __n_steps: int
     n_parcels: int
     max_step: int
     map: WarehouseMap
-    robot: sprites.Shuttle
+    shuttle: sprites.Shuttle
     render_mode: RenderMode
-    robot_sprites: pygame.sprite.Group | None  # type: ignore
-    parcel_sprites: pygame.sprite.Group | None  # type: ignore
     screen: pygame.Surface | None
     clock: pygame.time.Clock | None
     metadata: dict[str, Any] = {
@@ -368,25 +373,19 @@ class Warehouse(Env[dict[str, npt.NDArray[np.float32] | npt.NDArray[np.uint8]], 
         self.map = WarehouseMap(
             n_rows, n_columns, n_subrows, n_lines, n_rays, render_mode
         )
-        self.robot = sprites.Shuttle(
+        self.shuttle = sprites.Shuttle(
             self.map.ray_nodes["2.0"], self.map.map_size, render_mode
         )
-        parcel = sprites.Parcel(self.map.line_nodes[f"1.{-1}"], render_mode)
+        _ = sprites.Parcel(self.map.line_nodes[f"1.{-1}"], render_mode)
         self.max_step = max_step
         self.render_mode = render_mode  # type: ignore
         match render_mode:
             case RenderMode.Human:
-                self.robot_sprites = pygame.sprite.Group()
-                self.parcel_sprites = pygame.sprite.Group()
-                self.robot_sprites.add(self.robot)  # type: ignore
-                self.parcel_sprites.add(parcel)  # type: ignore
                 if self.map.scene:
                     self.screen = pygame.display.set_mode(self.map.scene.get_size())
                 self.clock = pygame.time.Clock()
                 pygame.display.set_caption("WAREHOUSE")
             case RenderMode.NoRender:
-                self.robot_sprites = None
-                self.parcel_sprites = None
                 self.screen = None
                 self.clock = None
             case _:
@@ -401,20 +400,12 @@ class Warehouse(Env[dict[str, npt.NDArray[np.float32] | npt.NDArray[np.uint8]], 
     ):
         self.__n_steps = 0
         self.n_parcel = 0
-        self.robot.reset(self.map.ray_nodes["2.0"])
+        self.shuttle.reset(self.map.ray_nodes["2.0"])
         for line_node in self.map.line_nodes.values():
             line_node.parcel = None
-        parcel = sprites.Parcel(self.map.line_nodes[f"1.{-1}"], self.render_mode)
-        if self.render_mode == RenderMode.Human:
-            for s in self.parcel_sprites:  # type: ignore
-                s.kill()  # type: ignore
-            self.parcel_sprites.add(parcel)  # type: ignore
-            self.render()
-
-        observation: dict[str, npt.NDArray[np.float32] | npt.NDArray[np.uint8]] = {
-            "observation": self.robot.observation,
-            "mask": self.robot.mask,
-        }
+        _ = sprites.Parcel(self.map.line_nodes[f"1.{-1}"], self.render_mode)
+        self.render()
+        observation = Obsevation(self.shuttle.observation, self.shuttle.mask)
         info: dict[str, Any] = {}
         return observation, info
 
@@ -424,11 +415,9 @@ class Warehouse(Env[dict[str, npt.NDArray[np.float32] | npt.NDArray[np.uint8]], 
         truncation = self.__n_steps == self.max_step
         if termination or truncation:
             raise Error("The environment has ended.")
-        reward = self.robot.step(Action(action), self)
-        observation: dict[str, npt.NDArray[np.float32] | npt.NDArray[np.uint8]] = {
-            "observation": self.robot.observation,
-            "mask": self.robot.mask,
-        }
+        reward = self.shuttle.step(Action(action), self)
+        self.__n_steps += 1
+        observation = Obsevation(self.shuttle.observation, self.shuttle.mask)
         termination = self.n_parcels == self.map.n_line_nodes
         truncation = self.__n_steps == self.max_step
         info: dict[str, Any] = {}
@@ -436,22 +425,36 @@ class Warehouse(Env[dict[str, npt.NDArray[np.float32] | npt.NDArray[np.uint8]], 
 
     @override
     def render(self):
-        self.screen.blit(self.map.scene, (0, 0))  # type: ignore
-        self.robot_sprites.draw(self.screen)  # type: ignore
-        self.parcel_sprites.draw(self.screen)  # type: ignore
-        self.clock.tick(self.metadata["render_fps"])  # type: ignore
-        pygame.display.update()
+        if self.screen and self.map.scene and self.clock:
+            self.screen.blit(self.map.scene, (0, 0))
+            self.shuttle.draw(self.screen)
+            for line_node in self.map.line_nodes.values():
+                if line_node.parcel:
+                    line_node.parcel.draw(self.screen)
+            self.clock.tick(self.metadata["render_fps"])
+            pygame.display.update()
 
 
 if __name__ == "__main__":
-    env = Warehouse(3, 3, 3, 3, True, 300, RenderMode.Human)
+    env = Warehouse(2, 2, 2, 2, True, 700, RenderMode.Human)
     running = True
     obs, _ = env.reset()
-    for i in range(500):
-        action_mask = obs["mask"]
+    for i in range(700):
+        if not running:
+            break
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_r:
+                    env.reset()
+        action_mask = obs.mask
         legal_actions = [i + 1 for i, v in enumerate(action_mask) if v]
         action = random.choice(legal_actions)
-        obs, _, _, _, _ = env.step(action)
+        obs, reward, termination, truncation, _ = env.step(action)
+        print(
+            f"In step {i}: reward {reward} termination {termination} truncation {truncation}"
+        )
 
     # env.render()
     # while running:
@@ -462,13 +465,11 @@ if __name__ == "__main__":
     #             if event.key == pygame.K_r:
     #                 env.reset()
     #             if event.key == pygame.K_w:
-    #                 env.step(sprites.Action.Up)
-    #             if event.key == pygame.K_w:
-    #                 env.step(sprites.Action.Up)
+    #                 env.step(1)
     #             if event.key == pygame.K_s:
-    #                 env.step(sprites.Action.Down)
+    #                 env.step(2)
     #             if event.key == pygame.K_a:
-    #                 env.step(sprites.Action.Left)
+    #                 env.step(3)
     #             if event.key == pygame.K_d:
-    #                 env.step(sprites.Action.Right)
+    #                 env.step(4)
     pygame.quit()
