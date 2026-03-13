@@ -401,7 +401,7 @@ class Warehouse(Env[npt.NDArray[np.float32], int]):
         options: dict[str, Any] | None = None,
     ):
         self.__n_steps = 0
-        self.n_parcel = 0
+        self.n_parcels = 0
         self.shuttle.reset(self.map.ray_nodes["2.0"])
         for line_node in self.map.line_nodes.values():
             line_node.parcel = None

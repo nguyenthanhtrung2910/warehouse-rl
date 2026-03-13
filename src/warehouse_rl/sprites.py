@@ -102,8 +102,8 @@ class Shuttle:
         has_parcel = 1 if self.parcel else 0
         return np.array(
             [
-                self.pos.x,
-                self.pos.y,
+                self.pos.x / self.__map_size.x,
+                self.pos.y / self.__map_size.y,
                 has_parcel,
             ],
             dtype=np.float32,
@@ -219,7 +219,9 @@ class Parcel:
     image: pygame.Surface | None
     rect: pygame.Rect | None
 
-    def __init__(self, pos: warehouse.LineNode, render_mode: RenderMode = RenderMode.NoRender):
+    def __init__(
+        self, pos: warehouse.LineNode, render_mode: RenderMode = RenderMode.NoRender
+    ):
         pos.parcel = self
         match render_mode:
             case RenderMode.Human:
