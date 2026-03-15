@@ -1,95 +1,93 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import numpy as np
 import pygame
 from pygame.math import Vector2
 
-from warehouse_rl.enums import Action, RenderMode, NODE_SIZE
 from warehouse_rl import warehouse
+from warehouse_rl.enums import NODE_SIZE, Action
 
-DEFAULT_REWARD = -0.1
-PICKUP_REWARD = 1
-DROPOFF_REWARD = 5
 FRAME_PER_STEP = 5
 
 
-@dataclass
-class StepResult:
-    is_performed: bool
-    reward: float
+class Parcel:
+    __image: pygame.Surface
+    __rect: pygame.Rect
+
+    def __init__(self, pos: warehouse.LineNode):
+        pos.parcel = self
+        self.__image = pygame.Surface(NODE_SIZE, pygame.SRCALPHA)
+        pygame.draw.circle(
+            self.__image,
+            (0, 255, 0),
+            NODE_SIZE / 2,
+            min(NODE_SIZE) / 4,
+        )
+        self.__rect = self.__image.get_rect()
+        self.__rect.center = pos.world_pos  # type: ignore
+
+    def translate(self, bias: Vector2):
+        self.__rect.move_ip(bias)
+
+    def draw(self, screen: pygame.Surface):
+        screen.blit(self.__image, self.__rect)
+
+    @property
+    def rect(self):
+        return self.__rect
+
+    def set_rect_center(self, coorddinate: Vector2):
+        self.__rect.center = coorddinate  # type: ignore
 
 
 class Shuttle:
     __map_size: Vector2
-    pos: warehouse.RayNode
-    parcel: Parcel | None
-    render_mode: RenderMode
-    image: pygame.Surface | None
-    rect: pygame.Rect | None
+    __pos: warehouse.RayNode
+    __parcel: Parcel | None
+    __image: pygame.Surface
+    __rect: pygame.Rect
 
     def __init__(
         self,
         pos: warehouse.RayNode,
         map_size: Vector2,
-        render_mode: RenderMode = RenderMode.NoRender,
     ):
         self.__map_size = map_size
-        self.pos = pos
-        self.pos.robot = self
-        self.parcel = None
-        self.render_mode = render_mode
-        match render_mode:
-            case RenderMode.Human:
-                self.image = pygame.Surface(NODE_SIZE, pygame.SRCALPHA)
-                pygame.draw.circle(
-                    self.image,
-                    (255, 0, 0),
-                    NODE_SIZE / 2,
-                    min(NODE_SIZE) / 2,
-                )
-                self.rect = self.image.get_rect()
-                self.rect.center = self.pos.world_pos  # type: ignore
-            case RenderMode.NoRender:
-                self.image = None
-                self.rect = None
-            case _:
-                raise ValueError(f"Invalid render_mode value {render_mode}")
+        self.__pos = pos
+        self.__pos.robot = self
+        self.__parcel = None
+        self.__image = pygame.Surface(NODE_SIZE, pygame.SRCALPHA)
+        pygame.draw.circle(
+            self.__image,
+            (255, 0, 0),
+            NODE_SIZE / 2,
+            min(NODE_SIZE) / 2,
+        )
+        self.__rect = self.__image.get_rect()
+        self.__rect.center = pos.world_pos  # type: ignore
 
-    def __is_legal_move(self, act: Action):
-        match act:
-            case Action.Up:
-                if not self.pos.up:
-                    return False
-                if self.pos.up.robot:
-                    return False
-            case Action.Down:
-                if not self.pos.down:
-                    return False
-                if self.pos.down.robot:
-                    return False
-            case Action.Left:
-                if not self.pos.left:
-                    return False
-                if self.pos.left.robot:
-                    return False
-            case Action.Right:
-                if not self.pos.right:
-                    return False
-                if self.pos.right.robot:
-                    return False
-            case _:
-                raise ValueError(f"Invalid action value {act}.")
-        return True
+    def translate(self, bias: Vector2):
+        self.__rect.move_ip(bias)
+        if self.__parcel:
+            self.__parcel.translate(bias)
+
+    def draw(self, screen: pygame.Surface):
+        screen.blit(self.__image, self.__rect)
+        if self.__parcel:
+            self.__parcel.draw(screen)
 
     @property
-    def next_rect(self):
-        rect = None
-        if self.image:
-            rect = self.image.get_rect()
-            rect.center = self.pos.world_pos  # type: ignore
-        return rect
+    def rect(self):
+        return self.__rect
+
+    def set_rect_center(self, coorddinate: Vector2):
+        self.__rect.center = coorddinate  # type: ignore
+        if self.__parcel:
+            self.__parcel.set_rect_center(coorddinate)
+
+    @property
+    def next_rect_center(self):
+        return self.__pos.world_pos
 
     @property
     def mask(self):
@@ -98,148 +96,113 @@ class Shuttle:
         )
 
     @property
-    def observation(self):
-        has_parcel = 1 if self.parcel else 0
+    def state(self):
+        has_parcel = 1 if self.__parcel else 0
         return np.array(
             [
-                self.pos.x / self.__map_size.x,
-                self.pos.y / self.__map_size.y,
+                self.__pos.x / self.__map_size.x,
+                self.__pos.y / self.__map_size.y,
                 has_parcel,
             ],
             dtype=np.float32,
         )
 
-    def move_up(self):
-        self.pos.robot = None
-        self.pos = self.pos.up  # type: ignore
-        self.pos.robot = self
+    def __is_legal_move(self, act: Action):
+        match act:
+            case Action.Up:
+                if not self.__pos.up:
+                    return False
+                if self.__pos.up.robot:
+                    return False
+            case Action.Down:
+                if not self.__pos.down:
+                    return False
+                if self.__pos.down.robot:
+                    return False
+            case Action.Left:
+                if not self.__pos.left:
+                    return False
+                if self.__pos.left.robot:
+                    return False
+            case Action.Right:
+                if not self.__pos.right:
+                    return False
+                if self.__pos.right.robot:
+                    return False
+            case _:
+                raise ValueError(f"Invalid action value {act}.")
+        return True
 
-    def move_down(self):
-        self.pos.robot = None
-        self.pos = self.pos.down  # type: ignore
-        self.pos.robot = self
+    def __move_up(self):
+        self.__pos.robot = None
+        self.__pos = self.__pos.up  # pyright: ignore[reportAttributeAccessIssue]
+        self.__pos.robot = self
 
-    def move_left(self):
-        self.pos.robot = None
-        self.pos = self.pos.left  # type: ignore
-        self.pos.robot = self
+    def __move_down(self):
+        self.__pos.robot = None
+        self.__pos = self.__pos.down  # pyright: ignore[reportAttributeAccessIssue]
+        self.__pos.robot = self
 
-    def move_right(self):
-        self.pos.robot = None
-        self.pos = self.pos.right  # type: ignore
-        self.pos.robot = self
+    def __move_left(self):
+        self.__pos.robot = None
+        self.__pos = self.__pos.left  # pyright: ignore[reportAttributeAccessIssue]
+        self.__pos.robot = self
+
+    def __move_right(self):
+        self.__pos.robot = None
+        self.__pos = self.__pos.right  # pyright: ignore[reportAttributeAccessIssue]
+        self.__pos.robot = self
 
     def pick_up(self):
-        if self.pos.from_line and self.pos.from_line.isPalletize and not self.parcel:
-            self.parcel = self.pos.from_line.parcel
-            self.pos.from_line.parcel = Parcel(self.pos.from_line, self.render_mode)
-            return self.pos.from_line
+        if (
+            self.__pos.from_line
+            and self.__pos.from_line.isPalletize
+            and self.__pos.from_line.parcel
+            and not self.__parcel
+        ):
+            self.__parcel = self.__pos.from_line.parcel
+            self.__pos.from_line.parcel = Parcel(self.__pos.from_line)
+            return self.__parcel
         return None
 
     def drop_off(self):
-        if self.pos.to_line and not self.pos.to_line.parcel and self.parcel:
-            current = self.pos.to_line
-            # loop until find a next line node that has
+        if self.__pos.to_line and not self.__pos.to_line.parcel and self.__parcel:
+            current = self.__pos.to_line
+            # Loop until find a next line node that already has parcel
             while current.next_node:
                 if current.next_node.parcel:
                     break
                 current = current.next_node
-            current.parcel = self.parcel
-            self.parcel = None
-            return current
-        return None
+            current.parcel = self.__parcel
+            self.__parcel = None
+            return current, current.parcel
+        return None, None
 
     def reset(self, pos: warehouse.RayNode):
-        self.pos.robot = None
-        self.pos = pos
-        self.pos.robot = self
-        self.parcel = None
-        if self.rect:
-            self.rect = self.next_rect
+        self.__pos.robot = None
+        self.__pos = pos
+        self.__pos.robot = self
+        self.__parcel = None
+        self.__rect = self.__image.get_rect()
+        self.__rect.center = pos.world_pos  # type: ignore
 
-    def step(self, action: Action, renderer: warehouse.Warehouse):
-        # check if action is legal
-        # actually, action from agent always is legal because of action mask
+    def step(self, action: Action):
+        # Check if action is legal
+        # Actually, action from agent always is legal because of action mask,
         # we check for case that all actions are illegal
-        reward = DEFAULT_REWARD
         is_action_legal = self.__is_legal_move(action)
         if not is_action_legal:
             # if no action is legal, do nothing
-            return 0
+            return False
         match action:
             case Action.Up:
-                self.move_up()
+                self.__move_up()
             case Action.Down:
-                self.move_down()
+                self.__move_down()
             case Action.Left:
-                self.move_left()
+                self.__move_left()
             case Action.Right:
-                self.move_right()
+                self.__move_right()
             case _:
                 raise ValueError(f"Invalid action value {action}.")
-        # simulate movement
-        if self.render_mode == RenderMode.Human:
-            diff = Vector2(self.next_rect.center) - self.rect.center  # type: ignore
-            for _ in range(0, FRAME_PER_STEP):
-                self.rect.move_ip(diff / FRAME_PER_STEP)  # type: ignore
-                if self.parcel:
-                    self.parcel.rect.move_ip(diff / FRAME_PER_STEP)  # type: ignore
-                renderer.render()
-        # try to pick up
-        line_node = self.pick_up()
-        if line_node:
-            reward = PICKUP_REWARD
-            # simulate pick up
-            if self.render_mode == RenderMode.Human:
-                diff = self.rect.center - line_node.world_pos  # type: ignore
-                for _ in range(0, FRAME_PER_STEP):
-                    self.parcel.rect.move_ip(diff / FRAME_PER_STEP)  # type: ignore
-                    renderer.render()
-        # try to drop off
-        line_node = self.drop_off()
-        if line_node:
-            reward = DROPOFF_REWARD
-            renderer.n_parcels += 1
-            # simulate drop off
-            if self.render_mode == RenderMode.Human:
-                diff = line_node.world_pos - self.rect.center  # type: ignore
-                for _ in range(0, FRAME_PER_STEP):
-                    line_node.parcel.rect.move_ip(diff / FRAME_PER_STEP)  # type: ignore
-                    renderer.render()
-        return reward
-
-    def draw(self, screen: pygame.Surface):
-        if self.image and self.rect:
-            screen.blit(self.image, self.rect)
-            if self.parcel:
-                self.parcel.draw(screen)
-
-
-class Parcel:
-    image: pygame.Surface | None
-    rect: pygame.Rect | None
-
-    def __init__(
-        self, pos: warehouse.LineNode, render_mode: RenderMode = RenderMode.NoRender
-    ):
-        pos.parcel = self
-        match render_mode:
-            case RenderMode.Human:
-                self.image = pygame.Surface(NODE_SIZE, pygame.SRCALPHA)
-                pygame.draw.circle(
-                    self.image,
-                    (0, 255, 0),
-                    NODE_SIZE / 2,
-                    min(NODE_SIZE) / 4,
-                )
-                self.rect = self.image.get_rect()
-                self.rect.center = pos.world_pos  # type: ignore
-            case RenderMode.NoRender:
-                self.image = None
-                self.rect = None
-            case _:
-                raise ValueError(f"Invalid render_mode value {render_mode}")
-
-    def draw(self, screen: pygame.Surface):
-        if self.image and self.rect:
-            screen.blit(self.image, self.rect)
+        return True
