@@ -3,11 +3,10 @@ from __future__ import annotations
 import os
 import time
 import warnings
-from typing import Any, Callable, cast
+from typing import Any, Callable, TypeVar, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
-from typing import TypeVar
 import torch
 from tianshou.algorithm.modelfree.dqn import DQN, DiscreteQLearningPolicy
 from tianshou.data import Batch
@@ -20,6 +19,7 @@ from tianshou.utils.torch_utils import (
 )
 
 TNet = TypeVar("TNet", bound=torch.nn.Module)
+
 
 class OffPolicyAgent:
     def __init__(
@@ -96,7 +96,7 @@ class Trainer:
         plot: bool = False,
     ) -> dict[str, Any]:
         # E - number of enviroments
-        # R - number of running envs
+        # D - number of done envs
         # O - observation-vector size
         # A - number actions
         assert agent.memory is not None, "Learning agent must having a memory."
@@ -107,65 +107,57 @@ class Trainer:
         num_gradient_steps = 0
         last_num_collected_steps = num_collected_steps
         last_num_collected_episodes = num_collected_episodes
-
-        # lists to record data for plotting
+        # Lists to record data for plotting
         episodes: list[int] = []
         rewards: list[float] = [0.0]
         start = time.time()
+        obs_e, _ = train_env.reset()
         while num_collected_episodes < self.n_training_episodes:
-            done_e = np.zeros(num_envs, dtype=np.bool_)
-            obs_e, _ = train_env.reset()
             if self.train_fn:
                 self.train_fn(num_collected_episodes, num_collected_steps)
-            while not all(done_e):
-                # Get observations from running envs
-                ids_r = np.where(done_e == False)[0]  # noqa: E712
-                obs_r = obs_e[ids_r]
-                obs_r_o = np.array([obs.obs for obs in obs_r])
-                action_mask_r_a = np.array([obs.mask for obs in obs_r])
-                obs_r = Batch(obs=Batch(obs=obs_r_o, mask=action_mask_r_a), info=None)
-                obs_r = cast(ObsBatchProtocol, obs_r)
-
-                # Forward observations to agent
-                act_r = agent.get_act_batch(obs_r, exploration_noise=True)
-
-                # Step in running envs
-                next_obs_r, rew_r, terminated_r, truncated_r, info_r = train_env.step(
-                    act_r, ids_r
-                )
-                next_obs_r_o = np.array([obs.obs for obs in next_obs_r])
-
-                # Add transitions to memories of all learning agents, only shared memory now
-                rollout = cast(
-                    RolloutBatchProtocol,
-                    Batch(
-                        obs=obs_r_o,
-                        act=act_r,
-                        rew=rew_r,
-                        terminated=terminated_r,
-                        truncated=truncated_r,
-                        obs_next=next_obs_r_o,
-                        info=info_r,
-                    ),
-                )
-                agent.memory.add(rollout, buffer_ids=ids_r)  # type: ignore
-                num_collected_steps += ids_r.size
-
-                # Policy updating
-                if (num_collected_steps - last_num_collected_steps) >= self.update_freq:
-                    num_bonus_steps = num_collected_steps - last_num_collected_steps
-                    with policy_within_training_step(agent.algorithm.policy):
-                        num_gradient_steps += agent.policy_update_fn(
-                            self.batch_size, num_bonus_steps
-                        )
-                    last_num_collected_steps = num_collected_steps
-
-                # Observe new observations and dones of all envs
-                done_e[ids_r] = terminated_r | truncated_r
-                obs_e[ids_r] = next_obs_r
-
-            num_collected_episodes += num_envs
-
+            # Get observations from envs
+            obs_e_o = np.array([obs.obs for obs in obs_e])
+            action_mask_e_a = np.array([obs.mask for obs in obs_e])
+            obs_e = Batch(obs=Batch(obs=obs_e_o, mask=action_mask_e_a), info=None)
+            obs_e = cast(ObsBatchProtocol, obs_e)
+            # Forward observations to agent
+            act_e = agent.get_act_batch(obs_e, exploration_noise=True)
+            # Step in envs
+            next_obs_e, rew_e, termination_e, truncation_e, info_e = train_env.step(
+                act_e
+            )
+            next_obs_e_o = np.array([obs.obs for obs in next_obs_e])
+            # Add transitions to memories of all learning agents, only shared memory now
+            rollout = cast(
+                RolloutBatchProtocol,
+                Batch(
+                    obs=obs_e_o,
+                    act=act_e,
+                    rew=rew_e,
+                    terminated=termination_e,
+                    truncated=truncation_e,
+                    obs_next=next_obs_e_o,
+                    info=info_e,
+                ),
+            )
+            agent.memory.add(rollout)
+            num_collected_steps += num_envs
+            # Policy updating
+            if (num_collected_steps - last_num_collected_steps) >= self.update_freq:
+                num_bonus_steps = num_collected_steps - last_num_collected_steps
+                with policy_within_training_step(agent.algorithm.policy):
+                    num_gradient_steps += agent.policy_update_fn(
+                        self.batch_size, num_bonus_steps
+                    )
+                last_num_collected_steps = num_collected_steps
+            # Prepare new observation for next iteration
+            obs_e = next_obs_e
+            # Reset ended envs
+            done_e = termination_e | truncation_e
+            id_d = np.where(done_e == True)[0]  # noqa: E712
+            if id_d.size != 0:
+                obs_e[id_d], _ = train_env.reset(id_d)
+                num_collected_episodes += id_d.size
             # Test
             if (num_collected_episodes - last_num_collected_episodes) >= self.test_freq:
                 test_stats = self.test(test_env, agent)
@@ -187,18 +179,14 @@ class Trainer:
                     )
                 )
                 last_num_collected_episodes = num_collected_episodes
-
                 # Break if reach required reward
                 if self.stop_fn and self.stop_fn(rewards[-1], num_collected_episodes):
                     break
-
         finish = time.time()
         if self.save_last_fn:
             self.save_last_fn()
-
         if plot:
             self.plot_stats(episodes, rewards)
-
         return {
             "reward_metric_stats": rewards,
             "num_collected_steps": num_collected_steps,
@@ -234,50 +222,44 @@ class Trainer:
     ) -> dict[str, Any]:
         # P - number of episodes
         # E - number of enviroments
-        # R - number of running envs
         # O - observation-vector size
         # A - number actions
         num_collected_steps = 0
         num_collected_episodes = 0
         num_envs = test_env.env_num
-        rewards_p_e = np.empty((0, num_envs))
-
+        # Array of size number episodes that stores reward in that episode
+        rewards_p = np.array([])
+        rewards_e = np.zeros(num_envs)
+        obs_e, _ = test_env.reset()
         while num_collected_episodes < self.n_testing_episodes:
-            rewards_e = np.zeros(num_envs)
-            done_e = np.zeros(num_envs, dtype=np.bool_)
-            obs_e, _ = test_env.reset()
             if self.test_fn:
                 self.test_fn(num_collected_episodes, num_collected_steps)
-            while not all(done_e):
-                # Gets observations of running envs
-                ids_r = np.where(done_e == False)[0]  # noqa: E712
-                obs_r = obs_e[ids_r]
-                obs_r_o = np.array([obs.obs for obs in obs_r])
-                action_mask_r_a = np.array([obs.mask for obs in obs_r])
-                obs_r = Batch(obs=Batch(obs=obs_r_o, mask=action_mask_r_a), info=None)
-                obs_r = cast(ObsBatchProtocol, obs_r)
-
-                # Forward observations to agent
-                act_r = agent.get_act_batch(obs_r, exploration_noise=False)
-
-                # Step in the running envs
-                next_obs_r, rew_r, termination_r, truncation_r, _ = test_env.step(
-                    act_r, ids_r
-                )
-                rewards_e[ids_r] += rew_r
-                num_collected_steps += ids_r.size
-
-                # Observe new observations and dones of all envs
-                done_e[ids_r] = termination_r | truncation_r
-                obs_e[ids_r] = next_obs_r
-
-            num_collected_episodes += num_envs
-            rewards_p_e = np.vstack((rewards_p_e, rewards_e))
-
+            # Gets observations of running envs
+            obs_e_o = np.array([obs.obs for obs in obs_e])
+            action_mask_e_a = np.array([obs.mask for obs in obs_e])
+            obs_e = Batch(obs=Batch(obs=obs_e_o, mask=action_mask_e_a), info=None)
+            obs_e = cast(ObsBatchProtocol, obs_e)
+            # Forward observations to agent
+            act_e = agent.get_act_batch(obs_e, exploration_noise=True)
+            # Step in running envs
+            next_obs_e, rew_e, termination_e, truncation_e, _ = test_env.step(act_e)
+            num_collected_steps += num_envs
+            rewards_e += rew_e
+            # Prepare new observation for next iteration
+            obs_e = next_obs_e
+            # Reset ended envs
+            done_e = termination_e | truncation_e
+            id_d = np.where(done_e == True)[0]  # noqa: E712
+            if id_d.size != 0:
+                obs_e[id_d], _ = test_env.reset(id_d)
+                num_collected_episodes += id_d.size
+                # Save reward from ended envs and start new reward recording
+                rewards_p = np.hstack((rewards_p, rewards_e[id_d]))
+                rewards_e[id_d] = 0
         if self.reward_metric:
-            reward = self.reward_metric(rewards_p_e)
+            reward = self.reward_metric(rewards_p)
         else:
-            reward = rewards_p_e.mean()
+            reward = rewards_p.mean()
         return {
             "reward": reward,
             "mean_num_steps": num_collected_steps / num_collected_episodes,
