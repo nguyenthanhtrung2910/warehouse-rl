@@ -405,13 +405,9 @@ class Warehouse(Env[Observation, int]):
                 ]
                 obs = np.hstack((self.shuttle.state, np.array(line_nodes_states)))
             case ObsMode.ResizedWindow:
-                surf = pygame.Surface(self.map.image.get_size())
-                self.__render_to_surface(surf)
-                obs = self.__create_obs_img(surf, STATE_SIZE)
+                obs = self.__create_obs_img()
             case ObsMode.FullWindow:
-                surf = pygame.Surface(self.map.image.get_size())
-                self.__render_to_surface(surf)
-                obs = self.__create_frame(surf, self.map.image.get_size())
+                obs = self.__create_frame()
             case _:
                 raise ValueError(
                     f"Invalid render_mode value: {self.__observation_mode}."
@@ -429,72 +425,36 @@ class Warehouse(Env[Observation, int]):
         is_moved = self.shuttle.step(Action(action))
         if is_moved:
             reward = DEFAULT_REWARD
-            # Simulate smooth shuttle movement
-            if self.screen and self.clock:
-                while True:
-                    direction = self.shuttle.pos.world_pos - self.shuttle.world_pos
-                    distance = direction.length()
-                    dt = self.clock.tick(self.metadata["render_fps"]) / 1000
-                    step = SPEED * dt
-                    if distance <= step or distance == 0:
-                        # Correct the final shuttle positions
-                        self.shuttle.world_pos = self.shuttle.pos.world_pos
-                        break
-                    else:
-                        self.shuttle.world_translate(direction.normalize() * step)
-                    self.__render_to_surface(self.screen)
-                    pygame.display.update()
-            elif self.obs_mode == ObsMode.ResizedWindow or self.obs_mode == ObsMode.FullWindow:
+            if not self.__simulate_movement(
+                self.shuttle, self.shuttle.pos.world_pos
+            ) and (
+                self.obs_mode == ObsMode.ResizedWindow
+                or self.obs_mode == ObsMode.FullWindow
+            ):
                 # Correct the final shuttle positions
                 self.shuttle.world_pos = self.shuttle.pos.world_pos
-
         parcel = self.shuttle.pick_up()
         if parcel:
             reward = PICKUP_REWARD
             # Simulate smooth parcel movement
-            if self.screen and self.clock:
-                while True:
-                    direction = self.shuttle.world_pos - parcel.world_pos
-                    distance = direction.length()
-                    dt = self.clock.tick(self.metadata["render_fps"]) / 1000
-                    step = SPEED * dt
-                    if distance <= step or distance == 0:
-                        # Correct the final shuttle positions
-                        parcel.world_pos = self.shuttle.world_pos
-                        break
-                    else:
-                        parcel.world_translate(direction.normalize() * step)
-                    self.__render_to_surface(self.screen)
-                    pygame.display.update()
-            elif self.obs_mode == ObsMode.ResizedWindow or self.obs_mode == ObsMode.FullWindow:
+            if self.__simulate_movement(parcel, self.shuttle.world_pos) and (
+                self.obs_mode == ObsMode.ResizedWindow
+                or self.obs_mode == ObsMode.FullWindow
+            ):
                 # Correct the final shuttle positions
                 parcel.world_pos = self.shuttle.world_pos
-
         to_line, parcel = self.shuttle.drop_off()
         if to_line and parcel:
             reward = DROPOFF_REWARD
             self.n_parcels += 1
             # Simulate smooth parcel movement
-            if self.screen and self.clock:
-                while True:
-                    direction = to_line.world_pos - parcel.world_pos
-                    distance = direction.length()
-                    dt = self.clock.tick(self.metadata["render_fps"]) / 1000
-                    step = SPEED * dt
-                    if distance <= step or distance == 0:
-                        # Correct the final shuttle positions
-                        parcel.world_pos = to_line.world_pos
-                        break
-                    else:
-                        parcel.world_translate(direction.normalize() * step)
-                    self.__render_to_surface(self.screen)
-                    pygame.display.update()
-            elif self.obs_mode == ObsMode.ResizedWindow or self.obs_mode == ObsMode.FullWindow:
+            if self.__simulate_movement(parcel, to_line.world_pos) and (
+                self.obs_mode == ObsMode.ResizedWindow
+                or self.obs_mode == ObsMode.FullWindow
+            ):
                 # Correct the final shuttle positions
                 parcel.world_pos = to_line.world_pos
-
         self.n_steps += 1
-
         # Observation based on mode
         match self.obs_mode:
             case ObsMode.Flatten:
@@ -505,16 +465,11 @@ class Warehouse(Env[Observation, int]):
                 ]
                 obs = np.hstack((self.shuttle.state, np.array(line_nodes_states)))
             case ObsMode.ResizedWindow:
-                surf = pygame.Surface(self.map.image.get_size())
-                self.__render_to_surface(surf)
-                obs = self.__create_obs_img(surf, STATE_SIZE)
+                obs = self.__create_obs_img()
             case ObsMode.FullWindow:
-                surf = pygame.Surface(self.map.image.get_size())
-                self.__render_to_surface(surf)
-                obs = self.__create_frame(surf, self.map.image.get_size())
+                obs = self.__create_frame()
             case _:
                 raise ValueError(f"Invalid render_mode value: {self.observation_mode}.")
-
         termination = self.n_parcels == self.map.n_line_nodes
         truncation = self.n_steps == self.max_step
         info: dict[str, Any] = {}
@@ -533,8 +488,27 @@ class Warehouse(Env[Observation, int]):
             self.__render_to_surface(self.screen)
             pygame.display.update()
 
-    def __create_obs_img(self, screen: pygame.Surface, size: tuple[float, float]):
-        scaled_screen = pygame.transform.smoothscale(screen, size)
+    def __simulate_movement(self, sprite: sprites.Sprite, target: Vector2):
+        if self.screen and self.clock:
+            while True:
+                direction = target - sprite.world_pos
+                distance = direction.length()
+                dt = self.clock.tick(self.metadata["render_fps"]) / 1000
+                step = SPEED * dt
+                if distance <= step or distance == 0:
+                    # Correct the final shuttle positions
+                    sprite.world_pos = target
+                    break
+                else:
+                    # Translate by small distance
+                    sprite.world_translate(direction.normalize() * step)
+                self.__render_to_surface(self.screen)
+                pygame.display.update()
+
+    def __create_obs_img(self):
+        surf = pygame.Surface(self.map.image.get_size())
+        self.__render_to_surface(surf)
+        scaled_screen = pygame.transform.smoothscale(surf, STATE_SIZE)
         # Transpose to torch convention dimension order (C, H, W)
         arr_chw = np.transpose(
             np.array(pygame.surfarray.pixels3d(scaled_screen)), axes=(2, 0, 1)
@@ -545,8 +519,10 @@ class Warehouse(Env[Observation, int]):
         # Min-max normalize per channel to [0,1]
         return (arr_chw - min_val) / (max_val - min_val)
 
-    def __create_frame(self, screen: pygame.Surface, size: tuple[float, float]):
-        scaled_screen = pygame.transform.smoothscale(screen, size)
+    def __create_frame(self):
+        surf = pygame.Surface(self.map.image.get_size())
+        self.__render_to_surface(surf)
+        scaled_screen = pygame.transform.smoothscale(surf, surf.get_size())
         # Transpose to dimension order (W, H, C)
         return np.transpose(
             np.array(pygame.surfarray.pixels3d(scaled_screen)), axes=(1, 0, 2)

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
+from typing import override
+
 import numpy as np
 import pygame
 from pygame.math import Vector2
@@ -10,78 +13,93 @@ from warehouse_rl.enums import NODE_SIZE, Action
 FRAME_PER_STEP = 5
 
 
-class Parcel:
+class Sprite(ABC):
     image: pygame.Surface
     rect: pygame.Rect
 
-    def __init__(self, pos: warehouse.LineNode):
-        pos.parcel = self
+    def __init__(self):
         self.image = pygame.Surface(NODE_SIZE, pygame.SRCALPHA)
+        self.rect = self.image.get_rect()
+
+    @property
+    def world_pos(self):
+        return Vector2(self.rect.center)
+
+    @world_pos.setter
+    @abstractmethod
+    def world_pos(self, world_pos: Vector2):
+        pass
+
+    @abstractmethod
+    def world_translate(self, bias: Vector2):
+        pass
+
+    @abstractmethod
+    def draw(self, screen: pygame.Surface):
+        pass
+
+
+class Parcel(Sprite):
+    def __init__(self, pos: warehouse.LineNode):
+        super().__init__()
+        pos.parcel = self
         pygame.draw.circle(
             self.image,
             (0, 255, 0),
             NODE_SIZE / 2,
             min(NODE_SIZE) / 4,
         )
-        self.rect = self.image.get_rect()
-        self.rect.center = pos.world_pos  # type: ignore
+        self.rect.center = pos.world_pos # pyright: ignore[reportAttributeAccessIssue]
 
-    @property
-    def world_pos(self):
-        return Vector2(self.rect.center)
-
-    @world_pos.setter
+    @Sprite.world_pos.setter
     def world_pos(self, world_pos: Vector2):
-        self.rect.center = world_pos  # type: ignore
+        self.rect.center = world_pos # pyright: ignore[reportAttributeAccessIssue]
 
+    @override
     def world_translate(self, bias: Vector2):
         self.rect.move_ip(bias)
 
+    @override
     def draw(self, screen: pygame.Surface):
         screen.blit(self.image, self.rect)
 
 
-class Shuttle:
+class Shuttle(Sprite):
     map_size: Vector2
-    image: pygame.Surface
     pos: warehouse.RayNode
     parcel: Parcel | None
-    rect: pygame.Rect
 
     def __init__(
         self,
         pos: warehouse.RayNode,
         map_size: Vector2,
     ):
+        super().__init__()
         self.map_size = map_size
         self.pos = pos
         self.pos.robot = self
         self.parcel = None
-        self.image = pygame.Surface(NODE_SIZE, pygame.SRCALPHA)
         pygame.draw.circle(
             self.image,
             (255, 0, 0),
             NODE_SIZE / 2,
             min(NODE_SIZE) / 2,
         )
-        self.rect = self.image.get_rect()
-        self.rect.center = pos.world_pos  # type: ignore
+        self.rect.center = pos.world_pos  # pyright: ignore[reportAttributeAccessIssue]
 
-    @property
-    def world_pos(self):
-        return Vector2(self.rect.center)
-    
-    @world_pos.setter
+    @Sprite.world_pos.setter
     def world_pos(self, world_pos: Vector2):
-        self.rect.center = world_pos  # type: ignore
+        self.rect.center = world_pos   # pyright: ignore[reportAttributeAccessIssue]
         if self.parcel:
             self.parcel.world_pos = world_pos
-    
+
+    @override
     def world_translate(self, bias: Vector2):
         self.rect.move_ip(bias)
         if self.parcel:
             self.parcel.world_translate(bias)
 
+    @override
     def draw(self, screen: pygame.Surface):
         screen.blit(self.image, self.rect)
         if self.parcel:
@@ -135,8 +153,7 @@ class Shuttle:
         self.pos = pos
         self.pos.robot = self
         self.parcel = None
-        self.rect = self.image.get_rect()
-        self.rect.center = pos.world_pos  # type: ignore
+        self.world_pos = pos.world_pos
 
     def step(self, action: Action):
         # Check if action is legal
@@ -158,7 +175,7 @@ class Shuttle:
             case _:
                 raise ValueError(f"Invalid action value {action}.")
         return True
-    
+
     def __is_legal_move(self, act: Action):
         match act:
             case Action.Up:
