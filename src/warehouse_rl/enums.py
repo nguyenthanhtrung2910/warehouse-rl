@@ -8,7 +8,7 @@ class RenderMode(Enum):
     Human = 1
 
 
-class ObservationMode(Enum):
+class ObsMode(Enum):
     Flatten = 0
     ResizedWindow = 1
     FullWindow = 2
@@ -29,4 +29,4 @@ class Action(Enum):
 
 
 NODE_SIZE = Vector2(100, 60)
-STATE_SIZE = (96, 96)
+STATE_SIZE = (32, 32)

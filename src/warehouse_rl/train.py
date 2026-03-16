@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import math
 import os
 from typing import Callable
@@ -8,21 +10,13 @@ from tianshou.algorithm.modelfree.dqn import DQN, DiscreteQLearningPolicy
 from tianshou.algorithm.optim import AdamOptimizerFactory
 from tianshou.data.buffer.vecbuf import PrioritizedVectorReplayBuffer
 from tianshou.env import DummyVectorEnv
-from tianshou.utils.net.common import Net
 
 from warehouse_rl.agents import OffPolicyAgent, Trainer
+from warehouse_rl.enums import ObsMode
 from warehouse_rl.warehouse import Warehouse
+from warehouse_rl.networks import Conv
 
-net = Net(
-    state_shape=19,
-    action_shape=4,
-    hidden_sizes=[1024, 1024, 512, 512, 256, 256, 128, 64],
-    norm_layer=torch.nn.LayerNorm,
-    dueling_param=(
-        {"hidden_sizes": [32], "norm_layer": torch.nn.LayerNorm},
-        {"hidden_sizes": [32], "norm_layer": torch.nn.LayerNorm},
-    ),
-)
+net = Conv(3)
 policy = DiscreteQLearningPolicy(
     model=net, action_space=spaces.Discrete(4), eps_training=1.0
 )
@@ -35,48 +29,77 @@ algorithm = DQN(
     is_double=True,
 )
 memory = PrioritizedVectorReplayBuffer(
-    total_size=250_000,
+    total_size=120_000,
     buffer_num=16,
     alpha=0.6,
     beta=0.4,
 )
-agent = OffPolicyAgent(algorithm,
+agent = OffPolicyAgent(
+    algorithm,
     memory=memory,
     gradient_steps_per_env_step=0.02,
 )
 
-def exponential_annealing(begin: float, end: float, decay_factor: float) -> Callable[[int], float]:
-    return lambda episode: max(begin*decay_factor**episode, end)
 
-def natural_exponential_annealing(begin: float, end: float, rate: float) -> Callable[[int], float]:
+def exponential_annealing(
+    begin: float, end: float, decay_factor: float
+) -> Callable[[int], float]:
+    return lambda episode: max(begin * decay_factor**episode, end)
+
+
+def natural_exponential_annealing(
+    begin: float, end: float, rate: float
+) -> Callable[[int], float]:
     return lambda episode: end + (begin - end) * math.exp(-rate * episode)
+
 
 eps_schedule = exponential_annealing(1.0, 0.05, 0.995)
 beta_schedule = natural_exponential_annealing(0.4, 1.0, 0.01)
-ckpt_dir = 'ckpt'
+ckpt_dir = "ckpt"
 os.makedirs(os.path.join(os.getcwd(), ckpt_dir), exist_ok=True)
+
+
 def train_fn(episode: int, step: int) -> None:
     agent.algorithm.policy.set_eps_training(eps_schedule(episode))
     if agent.memory:
         agent.memory.set_beta(beta_schedule(episode))
+
+
 def save_last_fn() -> None:
-    torch.save(agent.algorithm.policy.state_dict(), os.path.join(ckpt_dir, 'last.pth'))
-    torch.save(agent.algorithm.optim.state_dict() , os.path.join(ckpt_dir, 'optim.pth')) # type: ignore
+    torch.save(agent.algorithm.policy.state_dict(), os.path.join(ckpt_dir, "last.pth"))
+    torch.save(agent.algorithm.optim.state_dict(), os.path.join(ckpt_dir, "optim.pth"))  # type: ignore
+
+
 def save_best_fn(episode: int) -> None:
-    torch.save(agent.algorithm.policy.state_dict(), os.path.join(ckpt_dir, 'best.pth'))
+    torch.save(agent.algorithm.policy.state_dict(), os.path.join(ckpt_dir, "best.pth"))
 
-train_env = DummyVectorEnv([lambda: Warehouse(2,2,2,2, True, 500) for _ in range(16)])
-test_env = DummyVectorEnv([lambda: Warehouse(2,2,2,2, True, 500) for _ in range(16)])
 
-trainer = Trainer( 
-  batch_size=64,
-  update_freq=200,
-  test_freq=50,
-  n_training_episodes=500,
-  n_testing_episodes=32,
-  train_fn=train_fn,
-  save_last_fn=save_last_fn,
-  save_best_fn=save_best_fn,
+train_env = DummyVectorEnv(
+    [
+        lambda: Warehouse(
+            2, 2, 2, 2, True, 300, observation_mode=ObsMode.ResizedWindow
+        )
+        for _ in range(16)
+    ]
+)
+test_env = DummyVectorEnv(
+    [
+        lambda: Warehouse(
+            2, 2, 2, 2, True, 300, observation_mode=ObsMode.ResizedWindow
+        )
+        for _ in range(16)
+    ]
+)
+
+trainer = Trainer(
+    batch_size=64,
+    update_freq=200,
+    test_freq=50,
+    n_training_episodes=400,
+    n_testing_episodes=32,
+    train_fn=train_fn,
+    save_last_fn=save_last_fn,
+    save_best_fn=save_best_fn,
 )
 
 trainer.train(train_env, test_env, agent, True)
