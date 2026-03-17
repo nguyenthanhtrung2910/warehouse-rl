@@ -6,6 +6,7 @@ import warnings
 from typing import Any, Callable, TypeVar, cast
 
 import matplotlib.pyplot as plt
+import numpy.typing as npt
 import numpy as np
 import torch
 from tianshou.algorithm.modelfree.dqn import DQN, DiscreteQLearningPolicy
@@ -19,6 +20,15 @@ from tianshou.utils.torch_utils import (
 )
 
 TNet = TypeVar("TNet", bound=torch.nn.Module)
+
+# Common array size convention
+# E - number of enviroments
+# D - number of ended enviroments
+# O - observation shape, can have multi dimensions
+# A - number of agents
+# AC - number actions
+# B - batch size = E * A
+# EP - number of episodes
 
 
 class OffPolicyAgent:
@@ -45,7 +55,7 @@ class OffPolicyAgent:
                 f"n_gradient_steps is 0, n_collected_steps={num_collected_steps}, "
                 f"update_per_step={self.gradient_steps_per_env_step}",
             )
-        if self.memory:
+        if self.memory is not None:
             with torch_train_mode(self.algorithm.policy):
                 for _ in range(num_gradient_steps):
                     self.algorithm.update(buffer=self.memory, sample_size=batch_size)
@@ -53,12 +63,76 @@ class OffPolicyAgent:
             warnings.warn("Agent has no memory, nothing is updated.")
         return num_gradient_steps
 
-    def get_act_batch(self, obs_batch: ObsBatchProtocol, exploration_noise: bool):
+    def get_act_batch(
+        self,
+        obs_e_a_o: npt.NDArray[np.float32],
+        mask_e_a_ac: npt.NDArray[np.uint8],
+        exploration_noise: bool,
+    ) -> npt.NDArray[np.int_]:
+        e = obs_e_a_o.shape[0]
+        a = obs_e_a_o.shape[1]
+        obs_b_o = obs_e_a_o.reshape(e * a, *obs_e_a_o.shape[2:])
+        mask_b_ac = mask_e_a_ac.reshape(e * a, mask_e_a_ac.shape[2])
+        obs_batch = cast(
+            ObsBatchProtocol, Batch(obs=Batch(obs=obs_b_o, mask=mask_b_ac), info=None)
+        )
         with torch.no_grad():
-            act = self.algorithm.policy(obs_batch).act
+            act_b = self.algorithm.policy(obs_batch).act
         if exploration_noise:
-            act = self.algorithm.policy.add_exploration_noise(act, obs_batch)
-        return act
+            act_b = self.algorithm.policy.add_exploration_noise(act_b, obs_batch)
+        return act_b.reshape(e, a)
+
+    @staticmethod
+    def get_act(
+        policy: DiscreteQLearningPolicy[TNet],
+        obs_a_o: npt.NDArray[np.float32],
+        mask_a_ac: npt.NDArray[np.uint8],
+        exploration_noise: bool,
+    ):
+        obs_batch = cast(
+            ObsBatchProtocol, Batch(obs=Batch(obs=obs_a_o, mask=mask_a_ac), info=None)
+        )
+        with torch.no_grad():
+            act_a = policy(obs_batch).act
+        if exploration_noise:
+            act_a = policy.add_exploration_noise(act_a, obs_batch)
+        return act_a
+
+    def save_to_memory(
+        self,
+        obs_e_a_o: npt.NDArray[np.float32],
+        info_e: npt.NDArray[np.object_],
+        obs_next_e_a_o: npt.NDArray[np.float32],
+        act_e_a: npt.NDArray[np.int_],
+        rew_e_a: npt.NDArray[np.float32],
+        termination_e: npt.NDArray[np.bool_],
+        truncation_e: npt.NDArray[np.bool_],
+    ) -> None:
+        if self.memory is not None:
+            e = obs_e_a_o.shape[0]
+            a = obs_e_a_o.shape[1]
+            obs_b_o = obs_e_a_o.reshape(e * a, *obs_e_a_o.shape[2:])
+            info_b = np.repeat(info_e, a)
+            obs_next_b_o = obs_next_e_a_o.reshape(e * a, *obs_next_e_a_o.shape[2:])
+            act_b = act_e_a.reshape(e * a)
+            rew_b = rew_e_a.reshape(e * a)
+            termination_b = np.repeat(termination_e, a)
+            truncation_b = np.repeat(truncation_e, a)
+            rollout = cast(
+                RolloutBatchProtocol,
+                Batch(
+                    obs=obs_b_o,
+                    info=info_b,
+                    obs_next=obs_next_b_o,
+                    act=act_b,
+                    rew=rew_b,
+                    terminated=termination_b,
+                    truncated=truncation_b,
+                ),
+            )
+            self.memory.add(rollout)
+        else:
+            warnings.warn("Agent has no memory, nothing is updated.")
 
 
 class Trainer:
@@ -93,74 +167,67 @@ class Trainer:
         train_env: DummyVectorEnv,
         test_env: DummyVectorEnv,
         agent: OffPolicyAgent,
+        n_agents: int,
         plot: bool = False,
     ) -> dict[str, Any]:
-        # E - number of enviroments
-        # D - number of done envs
-        # O - observation-vector size
-        # A - number actions
         assert agent.memory is not None, "Learning agent must having a memory."
-        assert train_env.env_num == agent.memory.buffer_num
-        num_envs = train_env.env_num
-        num_collected_steps = 0
-        num_collected_episodes = 0
-        num_gradient_steps = 0
-        last_num_collected_steps = num_collected_steps
-        last_num_collected_episodes = num_collected_episodes
-        # Lists to record data for plotting
+        assert train_env.env_num * n_agents == agent.memory.buffer_num
+        n_envs = train_env.env_num
+        n_collected_steps = 0
+        n_collected_episodes = 0
+        n_gradient_steps = 0
+        last_n_collected_steps = n_collected_steps
+        last_n_collected_episodes = n_collected_episodes
+        # Lists of recorded data for plotting
         episodes: list[int] = []
         rewards: list[float] = [0.0]
         start = time.time()
         obs_e, _ = train_env.reset()
-        while num_collected_episodes < self.n_training_episodes:
+        while n_collected_episodes < self.n_training_episodes:
             if self.train_fn:
-                self.train_fn(num_collected_episodes, num_collected_steps)
+                self.train_fn(n_collected_episodes, n_collected_steps)
             # Get observations from envs
-            obs_e_o = np.array([obs.obs for obs in obs_e])
-            action_mask_e_a = np.array([obs.mask for obs in obs_e])
-            obs_e = Batch(obs=Batch(obs=obs_e_o, mask=action_mask_e_a), info=None)
-            obs_e = cast(ObsBatchProtocol, obs_e)
+            obs_e_a_o = np.stack([obs.obs for obs in obs_e])
+            mask_e_a_ac = np.stack([obs.mask for obs in obs_e])
             # Forward observations to agent
-            act_e = agent.get_act_batch(obs_e, exploration_noise=True)
+            act_e_a = agent.get_act_batch(
+                obs_e_a_o, mask_e_a_ac, exploration_noise=True
+            )
             # Step in envs
-            next_obs_e, rew_e, termination_e, truncation_e, info_e = train_env.step(
-                act_e
+            obs_next_e, rew_e_a, termination_e, truncation_e, info_e = train_env.step(
+                act_e_a
             )
-            next_obs_e_o = np.array([obs.obs for obs in next_obs_e])
+            obs_next_e_a_o = np.stack([obs.obs for obs in obs_next_e])
             # Add transitions to memories of all learning agents, only shared memory now
-            rollout = cast(
-                RolloutBatchProtocol,
-                Batch(
-                    obs=obs_e_o,
-                    act=act_e,
-                    rew=rew_e,
-                    terminated=termination_e,
-                    truncated=truncation_e,
-                    obs_next=next_obs_e_o,
-                    info=info_e,
-                ),
+            agent.save_to_memory(
+                obs_e_a_o,
+                info_e,
+                obs_next_e_a_o,
+                act_e_a,
+                rew_e_a,
+                termination_e,
+                truncation_e,
             )
-            agent.memory.add(rollout)
-            num_collected_steps += num_envs
+            n_collected_steps += n_envs
             # Policy updating
-            if (num_collected_steps - last_num_collected_steps) >= self.update_freq:
-                num_bonus_steps = num_collected_steps - last_num_collected_steps
+            if (n_collected_steps - last_n_collected_steps) >= self.update_freq:
+                num_bonus_steps = n_collected_steps - last_n_collected_steps
                 with policy_within_training_step(agent.algorithm.policy):
-                    num_gradient_steps += agent.policy_update_fn(
+                    n_gradient_steps += agent.policy_update_fn(
                         self.batch_size, num_bonus_steps
                     )
-                last_num_collected_steps = num_collected_steps
+                last_n_collected_steps = n_collected_steps
             # Prepare new observation for next iteration
-            obs_e = next_obs_e
+            obs_e = obs_next_e
             # Reset ended envs
             done_e = termination_e | truncation_e
             id_d = np.where(done_e == True)[0]  # noqa: E712
             if id_d.size != 0:
                 obs_e[id_d], _ = train_env.reset(id_d)
-                num_collected_episodes += id_d.size
+                n_collected_episodes += id_d.size
             # Test
-            if (num_collected_episodes - last_num_collected_episodes) >= self.test_freq:
-                test_stats = self.test(test_env, agent)
+            if (n_collected_episodes - last_n_collected_episodes) >= self.test_freq:
+                test_stats = self.test(test_env, n_agents, agent)
                 num_steps, reward_metric = (
                     test_stats["mean_num_steps"],
                     test_stats["reward"],
@@ -170,17 +237,17 @@ class Trainer:
                     and reward_metric > rewards[-1]
                     and self.save_best_fn
                 ):
-                    self.save_best_fn(num_collected_episodes)
-                episodes.append(num_collected_episodes)
+                    self.save_best_fn(n_collected_episodes)
+                episodes.append(n_collected_episodes)
                 rewards.append(reward_metric)
                 print(
                     "===episode {:04d} done with number steps: {:5.1f}, reward: {:+06.2f}===".format(
-                        (num_collected_episodes), num_steps, reward_metric
+                        (n_collected_episodes), num_steps, reward_metric
                     )
                 )
-                last_num_collected_episodes = num_collected_episodes
+                last_n_collected_episodes = n_collected_episodes
                 # Break if reach required reward
-                if self.stop_fn and self.stop_fn(rewards[-1], num_collected_episodes):
+                if self.stop_fn and self.stop_fn(rewards[-1], n_collected_episodes):
                     break
         finish = time.time()
         if self.save_last_fn:
@@ -189,9 +256,9 @@ class Trainer:
             self.plot_stats(episodes, rewards)
         return {
             "reward_metric_stats": rewards,
-            "num_collected_steps": num_collected_steps,
-            "num_collected_episodes": num_collected_episodes,
-            "num_gradient_steps": num_gradient_steps,
+            "num_collected_steps": n_collected_steps,
+            "num_collected_episodes": n_collected_episodes,
+            "num_gradient_steps": n_gradient_steps,
             "training_time": finish - start,
         }
 
@@ -218,9 +285,9 @@ class Trainer:
     def test(
         self,
         test_env: DummyVectorEnv,
+        n_agents: int,
         agent: OffPolicyAgent,
     ) -> dict[str, Any]:
-        # P - number of episodes
         # E - number of enviroments
         # O - observation-vector size
         # A - number actions
@@ -228,25 +295,25 @@ class Trainer:
         num_collected_episodes = 0
         num_envs = test_env.env_num
         # Array of size number episodes that stores reward in that episode
-        rewards_p = np.array([])
-        rewards_e = np.zeros(num_envs)
+        rewards_p_a: list[npt.NDArray[np.float32]] = []
+        rewards_e_a = np.zeros((num_envs, n_agents), dtype=np.float32)
         obs_e, _ = test_env.reset()
         while num_collected_episodes < self.n_testing_episodes:
             if self.test_fn:
                 self.test_fn(num_collected_episodes, num_collected_steps)
-            # Gets observations of running envs
-            obs_e_o = np.array([obs.obs for obs in obs_e])
-            action_mask_e_a = np.array([obs.mask for obs in obs_e])
-            obs_e = Batch(obs=Batch(obs=obs_e_o, mask=action_mask_e_a), info=None)
-            obs_e = cast(ObsBatchProtocol, obs_e)
+            # Get observations from envs
+            obs_e_a_o = np.stack([obs.obs for obs in obs_e])
+            mask_e_a_ac = np.stack([obs.mask for obs in obs_e])
             # Forward observations to agent
-            act_e = agent.get_act_batch(obs_e, exploration_noise=True)
-            # Step in running envs
-            next_obs_e, rew_e, termination_e, truncation_e, _ = test_env.step(act_e)
+            act_e_a = agent.get_act_batch(
+                obs_e_a_o, mask_e_a_ac, exploration_noise=False
+            )
+            # Step in envs
+            obs_next_e, rew_e_a, termination_e, truncation_e, _ = test_env.step(act_e_a)
             num_collected_steps += num_envs
-            rewards_e += rew_e
+            rewards_e_a += rew_e_a
             # Prepare new observation for next iteration
-            obs_e = next_obs_e
+            obs_e = obs_next_e
             # Reset ended envs
             done_e = termination_e | truncation_e
             id_d = np.where(done_e == True)[0]  # noqa: E712
@@ -254,12 +321,13 @@ class Trainer:
                 obs_e[id_d], _ = test_env.reset(id_d)
                 num_collected_episodes += id_d.size
                 # Save reward from ended envs and start new reward recording
-                rewards_p = np.hstack((rewards_p, rewards_e[id_d]))
-                rewards_e[id_d] = 0
+                rewards_p_a.append(rewards_e_a[id_d])
+                rewards_e_a[id_d] = 0
+        reward_p_a = np.vstack(rewards_p_a)
         if self.reward_metric:
-            reward = self.reward_metric(rewards_p)
+            reward = self.reward_metric(reward_p_a)
         else:
-            reward = rewards_p.mean()
+            reward = reward_p_a.mean()
         return {
             "reward": reward,
             "mean_num_steps": num_collected_steps / num_collected_episodes,

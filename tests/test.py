@@ -1,18 +1,29 @@
 import os
-from typing import cast
 
 import numpy as np
 import torch
 from gymnasium import spaces
 from tianshou.algorithm.modelfree.dqn import DiscreteQLearningPolicy
-from tianshou.data import Batch
-from tianshou.data.types import ObsBatchProtocol
+from tianshou.utils.net.common import Net
 
-from warehouse_rl.networks import Conv
-from warehouse_rl.enums import ObsMode
-from warehouse_rl.warehouse import RenderMode, Warehouse
+from warehouse_rl.agents import OffPolicyAgent
 
-net = Conv(3)
+# from warehouse_rl.networks import Conv
+from warehouse_rl.enums import RenderMode
+from warehouse_rl.warehouse import Warehouse
+
+n_agents = 4
+net = Net(
+    state_shape=19,
+    action_shape=4,
+    hidden_sizes=[1024, 1024, 512, 512, 256, 256, 128, 64],
+    norm_layer=torch.nn.LayerNorm,
+    activation=torch.nn.ReLU,
+    dueling_param=(
+        {"hidden_sizes": [32], "norm_layer": torch.nn.LayerNorm},
+        {"hidden_sizes": [32], "norm_layer": torch.nn.LayerNorm},
+    ),
+)
 policy = DiscreteQLearningPolicy(
     model=net, action_space=spaces.Discrete(4), eps_inference=1.0, eps_training=1.0
 )
@@ -23,21 +34,15 @@ policy.load_state_dict(
     )
 )
 
-env = Warehouse(2, 2, 2, 2, True, 500, RenderMode.Human, ObsMode.ResizedWindow)
+env = Warehouse(2, 2, 2, 2, True, 500, n_agents, render_mode=RenderMode.Human)
 obs, _ = env.reset()
 
 done = False
-re = 0
+re = np.zeros(n_agents)
 while not done:
-    obs_batch = Batch(
-        obs=Batch(obs=np.array([obs.obs]), mask=np.array([obs.mask])), info=None
-    )
-    obs_batch = cast(ObsBatchProtocol, obs_batch)
-    with torch.no_grad():
-        act = policy(obs_batch).act
-    next_obs, reward, termination, truncation, info = env.step(act)
+    act_a = OffPolicyAgent.get_act(policy, obs.obs, obs.mask, False)
+    next_obs, reward, termination, truncation, info = env.step(act_a)
     re += reward
     obs = next_obs
     done = termination or truncation
-
-print(re)
+print(re.mean())

@@ -26,7 +26,7 @@ from warehouse_rl.enums import (
 
 pygame.init()
 
-SPEED = 400
+SPEED = 300
 DEFAULT_REWARD = -0.1
 PICKUP_REWARD = 1
 DROPOFF_REWARD = 5
@@ -183,7 +183,7 @@ class WarehouseMap:
     def __create_lines(
         self, n_rows: int, n_columns: int, n_subrows: int, n_lines: int, n_rays: int
     ):
-        # add line nodes
+        # Add line nodes
         for row in range(n_rows):
             for column in range(n_columns):
                 for innner_row in range(n_subrows):
@@ -193,17 +193,17 @@ class WarehouseMap:
                             row * (n_subrows + n_rays) + innner_row + 2,
                         )
                         self.line_nodes[line_node.id] = line_node
-        # add palletize node
+        # Add palletize node
         palletizer = LineNode(1, -1, True)
         self.line_nodes[palletizer.id] = palletizer
-        # add link from ray to line
+        # Add link from ray to line
         for ray_node in self.ray_nodes.values():
             for line_node in self.line_nodes.values():
                 if (line_node.x == ray_node.x) and (line_node.y - ray_node.y == -1):
                     ray_node.from_line = line_node
                 if (line_node.x == ray_node.x) and (line_node.y - ray_node.y == 1):
                     ray_node.to_line = line_node
-        # add link between line nodes
+        # Add link between line nodes
         for line_node1 in self.line_nodes.values():
             for line_node2 in self.line_nodes.values():
                 if (line_node1.x == line_node2.x) and (
@@ -218,9 +218,9 @@ class WarehouseMap:
         self.line_nodes = {}
         direction = False
         line_begin_end: list[tuple[RayNode, RayNode]] = []
-        # add horizontal edges
+        # Add horizontal edges
         for row in range(n_rows + 1):
-            # double ray in first and last rays
+            # Double ray in first and last rays
             if row == 0:
                 for pair in range(0, 2):
                     line_begin_end.append(
@@ -251,7 +251,7 @@ class WarehouseMap:
                         )
                     )
                     direction = not direction
-        # add vertical ray
+        # Add vertical ray
         for i in range(len(line_begin_end) - 1):
             self.__create_ray_edge(
                 line_begin_end[i][0], line_begin_end[i + 1][0], Direction.Down
@@ -344,7 +344,6 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
     n_shuttles: int
     max_step: int
     map: WarehouseMap
-    # shuttle: sprites.Shuttle
     shuttles: list[sprites.Shuttle]
     obs_mode: ObsMode
     screen: pygame.Surface | None
@@ -375,7 +374,6 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
         n_rays: int = 2 if is_double_line else 1
         self.max_step = max_step
         self.map = WarehouseMap(n_rows, n_columns, n_subrows, n_lines, n_rays)
-        # self.shuttle = sprites.Shuttle(self.map.ray_nodes["2.0"], self.map.map_size)
         self.shuttles = []
         for ray_node in random.sample(list(self.map.ray_nodes.values()), n_shuttles):
             self.shuttles.append(sprites.Shuttle(ray_node, self.map.map_size))
@@ -401,14 +399,10 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
         seed: int | None = None,
         options: dict[str, Any] | None = None,
     ):
-        # A - number of agents
-        # AC - number of actions
-        # O - size of flatten observation
         if seed:
             random.seed(seed)
         self.n_steps = 0
         self.n_parcels = 0
-        # self.shuttle.reset(self.map.ray_nodes["2.0"])
         for shuttle, ray_node in zip(
             self.shuttles,
             random.sample(list(self.map.ray_nodes.values()), self.n_shuttles),
@@ -418,33 +412,9 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
             line_node.parcel = None
         _ = sprites.Parcel(self.map.line_nodes[f"1.{-1}"])
         self.render()
-        match self.obs_mode:
-            case ObsMode.Flatten:
-                line_nodes_states = [
-                    1 if line_node.parcel else 0
-                    for line_node in self.map.line_nodes.values()
-                    if not line_node.isPalletize
-                ]
-                # obs <==> obs_a_o
-                obs = np.vstack(
-                    [
-                        np.hstack((shuttle.state, np.array(line_nodes_states)))
-                        for shuttle in self.shuttles
-                    ]
-                )
-            case ObsMode.ResizedWindow:
-                # TODO: obs <==> obs_a_c_h_w
-                obs = self.__create_obs_img()
-            case ObsMode.FullWindow:
-                # obs <==> obs_w_h_c
-                obs = self.__create_frame()
-            case _:
-                raise ValueError(
-                    f"Invalid render_mode value: {self.__observation_mode}."
-                )
-        mask_a_ac = np.vstack([shuttle.mask for shuttle in self.shuttles])
+        obs = self.__make_observation()
         info: dict[str, Any] = {}
-        return Observation(obs, mask_a_ac), info
+        return obs, info
 
     @override
     def step(self, action: npt.NDArray[np.integer]):
@@ -498,7 +468,26 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
         self.__simulate_movement(parcel_movements)
 
         self.n_steps += 1
-        # Observation based on mode
+        obs = self.__make_observation()
+        termination = self.n_parcels == self.map.n_line_nodes
+        truncation = self.n_steps == self.max_step
+        info: dict[str, Any] = {}
+        return (
+            obs,
+            np.array(reward_a),
+            termination,
+            truncation,
+            info,
+        )
+
+    @override
+    def render(self):
+        if self.screen and self.clock:
+            self.clock.tick(self.metadata["render_fps"])
+            self.__render_to_surface(self.screen)
+            pygame.display.update()
+
+    def __make_observation(self):
         match self.obs_mode:
             case ObsMode.Flatten:
                 line_nodes_states = [
@@ -507,6 +496,8 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
                     if not line_node.isPalletize
                 ]
                 # obs <==> obs_a_o
+                # TODO: Should we add at least state of arounding shuttles to each 
+                # shuttle's observation? For centralized training?
                 obs = np.vstack(
                     [
                         np.hstack((shuttle.state, np.array(line_nodes_states)))
@@ -520,25 +511,11 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
                 # obs <==> obs_w_h_c
                 obs = self.__create_frame()
             case _:
-                raise ValueError(f"Invalid render_mode value: {self.observation_mode}.")
+                raise ValueError(
+                    f"Invalid render_mode value: {self.__observation_mode}."
+                )
         mask_a_ac = np.vstack([shuttle.mask for shuttle in self.shuttles])
-        termination = self.n_parcels == self.map.n_line_nodes
-        truncation = self.n_steps == self.max_step
-        info: dict[str, Any] = {}
-        return (
-            Observation(obs, mask_a_ac),
-            np.array(reward_a),
-            termination,
-            truncation,
-            info,
-        )
-
-    @override
-    def render(self):
-        if self.screen and self.clock:
-            self.clock.tick(self.metadata["render_fps"])
-            self.__render_to_surface(self.screen)
-            pygame.display.update()
+        return Observation(obs, mask_a_ac)
 
     def __simulate_movement(self, movements: list[Movement]):
         if self.screen and self.clock:

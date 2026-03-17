@@ -10,13 +10,23 @@ from tianshou.algorithm.modelfree.dqn import DQN, DiscreteQLearningPolicy
 from tianshou.algorithm.optim import AdamOptimizerFactory
 from tianshou.data.buffer.vecbuf import PrioritizedVectorReplayBuffer
 from tianshou.env import DummyVectorEnv
+from tianshou.utils.net.common import Net
 
 from warehouse_rl.agents import OffPolicyAgent, Trainer
-from warehouse_rl.enums import ObsMode
 from warehouse_rl.warehouse import Warehouse
-from warehouse_rl.networks import Conv
 
-net = Conv(3)
+n_agents = 4
+net = Net(
+    state_shape=19,
+    action_shape=4,
+    hidden_sizes=[1024, 1024, 512, 512, 256, 256, 128, 64],
+    norm_layer=torch.nn.LayerNorm,
+    activation=torch.nn.ReLU,
+    dueling_param=(
+        {"hidden_sizes": [32], "norm_layer": torch.nn.LayerNorm},
+        {"hidden_sizes": [32], "norm_layer": torch.nn.LayerNorm},
+    ),
+)
 policy = DiscreteQLearningPolicy(
     model=net, action_space=spaces.Discrete(4), eps_training=1.0
 )
@@ -29,8 +39,8 @@ algorithm = DQN(
     is_double=True,
 )
 memory = PrioritizedVectorReplayBuffer(
-    total_size=120_000,
-    buffer_num=16,
+    total_size=250_000 * n_agents,
+    buffer_num=16 * n_agents,
     alpha=0.6,
     beta=0.4,
 )
@@ -61,7 +71,7 @@ os.makedirs(os.path.join(os.getcwd(), ckpt_dir), exist_ok=True)
 
 def train_fn(episode: int, step: int) -> None:
     agent.algorithm.policy.set_eps_training(eps_schedule(episode))
-    if agent.memory:
+    if agent.memory is not None:
         agent.memory.set_beta(beta_schedule(episode))
 
 
@@ -75,31 +85,21 @@ def save_best_fn(episode: int) -> None:
 
 
 train_env = DummyVectorEnv(
-    [
-        lambda: Warehouse(
-            2, 2, 2, 2, True, 300, observation_mode=ObsMode.ResizedWindow
-        )
-        for _ in range(16)
-    ]
+    [lambda: Warehouse(2, 2, 2, 2, True, 500, n_agents) for _ in range(16)]
 )
 test_env = DummyVectorEnv(
-    [
-        lambda: Warehouse(
-            2, 2, 2, 2, True, 300, observation_mode=ObsMode.ResizedWindow
-        )
-        for _ in range(16)
-    ]
+    [lambda: Warehouse(2, 2, 2, 2, True, 500, n_agents) for _ in range(16)]
 )
 
 trainer = Trainer(
     batch_size=64,
     update_freq=200,
     test_freq=50,
-    n_training_episodes=400,
+    n_training_episodes=500,
     n_testing_episodes=32,
     train_fn=train_fn,
     save_last_fn=save_last_fn,
     save_best_fn=save_best_fn,
 )
 
-trainer.train(train_env, test_env, agent, True)
+trainer.train(train_env, test_env, agent, n_agents, True)
