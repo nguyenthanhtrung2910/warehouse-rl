@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 import random
 from abc import ABC, abstractmethod
-from csv import Error
 from dataclasses import dataclass
 from typing import Any, override
 
@@ -27,8 +26,7 @@ from warehouse_rl.enums import (
 
 pygame.init()
 
-FRAME_PER_STEP = 5
-SPEED = 200
+SPEED = 400
 DEFAULT_REWARD = -0.1
 PICKUP_REWARD = 1
 DROPOFF_REWARD = 5
@@ -334,12 +332,20 @@ class Observation:
     mask: npt.NDArray[np.uint8]
 
 
-class Warehouse(Env[Observation, int]):
+@dataclass
+class Movement:
+    sprite: sprites.Sprite
+    target: Vector2
+
+
+class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
     n_steps: int
     n_parcels: int
+    n_shuttles: int
     max_step: int
     map: WarehouseMap
-    shuttle: sprites.Shuttle
+    # shuttle: sprites.Shuttle
+    shuttles: list[sprites.Shuttle]
     obs_mode: ObsMode
     screen: pygame.Surface | None
     clock: pygame.time.Clock | None
@@ -347,7 +353,7 @@ class Warehouse(Env[Observation, int]):
         "render_modes": ["human"],
         "name": "warehouse",
         "is_parallelizable": True,
-        "render_fps": 24,
+        "render_fps": 20,
     }
 
     def __init__(
@@ -358,18 +364,24 @@ class Warehouse(Env[Observation, int]):
         n_lines: int,
         is_double_line: bool,
         max_step: int,
+        n_shuttles: int,
         render_mode: RenderMode = RenderMode.Null,
         observation_mode: ObsMode = ObsMode.Flatten,
     ) -> None:
         super().__init__()
         self.n_steps = 0
         self.n_parcels = 0
+        self.n_shuttles = n_shuttles
         n_rays: int = 2 if is_double_line else 1
         self.max_step = max_step
         self.map = WarehouseMap(n_rows, n_columns, n_subrows, n_lines, n_rays)
-        self.shuttle = sprites.Shuttle(self.map.ray_nodes["2.0"], self.map.map_size)
+        # self.shuttle = sprites.Shuttle(self.map.ray_nodes["2.0"], self.map.map_size)
+        self.shuttles = []
+        for ray_node in random.sample(list(self.map.ray_nodes.values()), n_shuttles):
+            self.shuttles.append(sprites.Shuttle(ray_node, self.map.map_size))
         _ = sprites.Parcel(self.map.line_nodes[f"1.{-1}"])
-        self.action_space = spaces.Discrete(4)
+        self.action_space = spaces.MultiDiscrete(np.full(n_shuttles, 4))
+        self.rend_mode = render_mode
         self.obs_mode = observation_mode
         match render_mode:
             case RenderMode.Null:
@@ -389,9 +401,19 @@ class Warehouse(Env[Observation, int]):
         seed: int | None = None,
         options: dict[str, Any] | None = None,
     ):
+        # A - number of agents
+        # AC - number of actions
+        # O - size of flatten observation
+        if seed:
+            random.seed(seed)
         self.n_steps = 0
         self.n_parcels = 0
-        self.shuttle.reset(self.map.ray_nodes["2.0"])
+        # self.shuttle.reset(self.map.ray_nodes["2.0"])
+        for shuttle, ray_node in zip(
+            self.shuttles,
+            random.sample(list(self.map.ray_nodes.values()), self.n_shuttles),
+        ):
+            shuttle.reset(ray_node)
         for line_node in self.map.line_nodes.values():
             line_node.parcel = None
         _ = sprites.Parcel(self.map.line_nodes[f"1.{-1}"])
@@ -403,57 +425,78 @@ class Warehouse(Env[Observation, int]):
                     for line_node in self.map.line_nodes.values()
                     if not line_node.isPalletize
                 ]
-                obs = np.hstack((self.shuttle.state, np.array(line_nodes_states)))
+                # obs <==> obs_a_o
+                obs = np.vstack(
+                    [
+                        np.hstack((shuttle.state, np.array(line_nodes_states)))
+                        for shuttle in self.shuttles
+                    ]
+                )
             case ObsMode.ResizedWindow:
+                # TODO: obs <==> obs_a_c_h_w
                 obs = self.__create_obs_img()
             case ObsMode.FullWindow:
+                # obs <==> obs_w_h_c
                 obs = self.__create_frame()
             case _:
                 raise ValueError(
                     f"Invalid render_mode value: {self.__observation_mode}."
                 )
+        mask_a_ac = np.vstack([shuttle.mask for shuttle in self.shuttles])
         info: dict[str, Any] = {}
-        return Observation(obs, self.shuttle.mask), info
+        return Observation(obs, mask_a_ac), info
 
     @override
-    def step(self, action: int):
+    def step(self, action: npt.NDArray[np.integer]):
         if self.n_parcels == self.map.n_line_nodes or self.n_steps == self.max_step:
-            raise Error(
+            raise ValueError(
                 "The environment has ended. You have to reset it before step it further."
             )
-        reward = 0
-        is_moved = self.shuttle.step(Action(action))
-        if is_moved:
-            reward = DEFAULT_REWARD
-            if not self.__simulate_movement(
-                self.shuttle, self.shuttle.pos.world_pos
-            ) and (
-                self.obs_mode == ObsMode.ResizedWindow
-                or self.obs_mode == ObsMode.FullWindow
-            ):
-                # Correct the final shuttle positions
-                self.shuttle.world_pos = self.shuttle.pos.world_pos
-        parcel = self.shuttle.pick_up()
-        if parcel:
-            reward = PICKUP_REWARD
-            # Simulate smooth parcel movement
-            if self.__simulate_movement(parcel, self.shuttle.world_pos) and (
-                self.obs_mode == ObsMode.ResizedWindow
-                or self.obs_mode == ObsMode.FullWindow
-            ):
-                # Correct the final shuttle positions
-                parcel.world_pos = self.shuttle.world_pos
-        to_line, parcel = self.shuttle.drop_off()
-        if to_line and parcel:
-            reward = DROPOFF_REWARD
-            self.n_parcels += 1
-            # Simulate smooth parcel movement
-            if self.__simulate_movement(parcel, to_line.world_pos) and (
-                self.obs_mode == ObsMode.ResizedWindow
-                or self.obs_mode == ObsMode.FullWindow
-            ):
-                # Correct the final shuttle positions
-                parcel.world_pos = to_line.world_pos
+        reward_a = [0.0] * self.n_shuttles
+
+        shuttle_movements: list[Movement] = []
+        for i, shuttle in enumerate(self.shuttles):
+            is_moved = shuttle.step(Action(action[i]))
+            if is_moved:
+                reward_a[i] = DEFAULT_REWARD
+                if self.rend_mode == RenderMode.Human:
+                    shuttle_movements.append(Movement(shuttle, shuttle.pos.world_pos))
+                if self.rend_mode == RenderMode.Null and (
+                    self.obs_mode == ObsMode.ResizedWindow
+                    or self.obs_mode == ObsMode.FullWindow
+                ):
+                    shuttle.world_pos = shuttle.pos.world_pos
+        self.__simulate_movement(shuttle_movements)
+
+        parcel_movements: list[Movement] = []
+        for i, shuttle in enumerate(self.shuttles):
+            parcel = shuttle.pick_up()
+            if parcel:
+                reward_a[i] = PICKUP_REWARD
+                if self.rend_mode == RenderMode.Human:
+                    parcel_movements.append(Movement(parcel, shuttle.world_pos))
+                if self.rend_mode == RenderMode.Null and (
+                    self.obs_mode == ObsMode.ResizedWindow
+                    or self.obs_mode == ObsMode.FullWindow
+                ):
+                    parcel.world_pos = shuttle.world_pos
+        self.__simulate_movement(parcel_movements)
+
+        parcel_movements: list[Movement] = []
+        for i, shuttle in enumerate(self.shuttles):
+            to_line, parcel = shuttle.drop_off()
+            if to_line and parcel:
+                reward_a[i] = DROPOFF_REWARD
+                self.n_parcels += 1
+                if self.rend_mode == RenderMode.Human:
+                    parcel_movements.append(Movement(parcel, to_line.world_pos))
+                if self.rend_mode == RenderMode.Null and (
+                    self.obs_mode == ObsMode.ResizedWindow
+                    or self.obs_mode == ObsMode.FullWindow
+                ):
+                    parcel.world_pos = to_line.world_pos
+        self.__simulate_movement(parcel_movements)
+
         self.n_steps += 1
         # Observation based on mode
         match self.obs_mode:
@@ -463,19 +506,28 @@ class Warehouse(Env[Observation, int]):
                     for line_node in self.map.line_nodes.values()
                     if not line_node.isPalletize
                 ]
-                obs = np.hstack((self.shuttle.state, np.array(line_nodes_states)))
+                # obs <==> obs_a_o
+                obs = np.vstack(
+                    [
+                        np.hstack((shuttle.state, np.array(line_nodes_states)))
+                        for shuttle in self.shuttles
+                    ]
+                )
             case ObsMode.ResizedWindow:
+                # TODO: obs <==> obs_a_c_h_w
                 obs = self.__create_obs_img()
             case ObsMode.FullWindow:
+                # obs <==> obs_w_h_c
                 obs = self.__create_frame()
             case _:
                 raise ValueError(f"Invalid render_mode value: {self.observation_mode}.")
+        mask_a_ac = np.vstack([shuttle.mask for shuttle in self.shuttles])
         termination = self.n_parcels == self.map.n_line_nodes
         truncation = self.n_steps == self.max_step
         info: dict[str, Any] = {}
         return (
-            Observation(obs, self.shuttle.mask),
-            reward,
+            Observation(obs, mask_a_ac),
+            np.array(reward_a),
             termination,
             truncation,
             info,
@@ -488,20 +540,25 @@ class Warehouse(Env[Observation, int]):
             self.__render_to_surface(self.screen)
             pygame.display.update()
 
-    def __simulate_movement(self, sprite: sprites.Sprite, target: Vector2):
+    def __simulate_movement(self, movements: list[Movement]):
         if self.screen and self.clock:
-            while True:
-                direction = target - sprite.world_pos
-                distance = direction.length()
-                dt = self.clock.tick(self.metadata["render_fps"]) / 1000
-                step = SPEED * dt
-                if distance <= step or distance == 0:
-                    # Correct the final shuttle positions
-                    sprite.world_pos = target
-                    break
-                else:
-                    # Translate by small distance
-                    sprite.world_translate(direction.normalize() * step)
+            not_reaches = [True] * len(movements)
+            while any(not_reaches):
+                for i, movement in enumerate(movements):
+                    if not_reaches[i]:
+                        direction = movement.target - movement.sprite.world_pos
+                        distance = direction.length()
+                        dt = self.clock.tick(self.metadata["render_fps"]) / 1000
+                        step = SPEED * dt
+                        if distance <= step or distance == 0:
+                            # Correct the final shuttle positions
+                            movement.sprite.world_pos = movement.target
+                            not_reaches[i] = False
+                        else:
+                            # Translate by small distance
+                            movement.sprite.world_translate(
+                                direction.normalize() * step
+                            )
                 self.__render_to_surface(self.screen)
                 pygame.display.update()
 
@@ -530,14 +587,15 @@ class Warehouse(Env[Observation, int]):
 
     def __render_to_surface(self, surface: pygame.Surface):
         surface.blit(self.map.image, (0, 0))
-        self.shuttle.draw(surface)
+        for shuttle in self.shuttles:
+            shuttle.draw(surface)
         for line_node in self.map.line_nodes.values():
             if line_node.parcel:
                 line_node.parcel.draw(surface)
 
 
 if __name__ == "__main__":
-    env = Warehouse(2, 2, 2, 2, True, 200, RenderMode.Human, ObsMode.Flatten)
+    env = Warehouse(2, 2, 2, 2, True, 200, 3, RenderMode.Human, ObsMode.Flatten)
     obs, info = env.reset()
     done = False
     running = True
@@ -550,30 +608,19 @@ if __name__ == "__main__":
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_r:
                     env.reset()
-        action_mask = obs.mask
-        legal_actions = [i for i, v in enumerate(action_mask) if v]
-        action = random.choice(legal_actions)
-        next_obs, reward, termination, truncation, info = env.step(action)
+        mask_a_ac = obs.mask
+        action_a: list[int] = []
+        for mask_ac in mask_a_ac:
+            legal_action_ac = [i for i, v in enumerate(mask_ac) if v]
+            if len(legal_action_ac) != 0:
+                action_a.append(random.choice(legal_action_ac))
+            else:
+                action_a.append(1)
+        next_obs, reward_a, termination, truncation, info = env.step(np.array(action_a))
         print(
-            f"In step {env.n_steps}: observation {obs.obs} action {action} reward {reward}"
+            f"In step {env.n_steps}: observation {obs.obs} action {action_a} reward {reward_a}"
         )
         obs = next_obs
         done = termination or truncation
 
-    # env.render()
-    # while running:
-    #     for event in pygame.event.get():
-    #         if event.type == pygame.QUIT:
-    #             running = False
-    #         if event.type == pygame.KEYDOWN:
-    #             if event.key == pygame.K_r:
-    #                 env.reset()
-    #             if event.key == pygame.K_w:
-    #                 env.step(0)
-    #             if event.key == pygame.K_s:
-    #                 env.step(1)
-    #             if event.key == pygame.K_a:
-    #                 env.step(2)
-    #             if event.key == pygame.K_d:
-    #                 env.step(3)
     pygame.quit()

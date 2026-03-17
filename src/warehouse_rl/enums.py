@@ -28,5 +28,5 @@ class Action(Enum):
     Right = 3
 
 
-NODE_SIZE = Vector2(100, 60)
+NODE_SIZE = Vector2(80, 50)
 STATE_SIZE = (32, 32)
