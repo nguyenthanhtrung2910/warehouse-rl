@@ -66,8 +66,8 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
         observation_mode: ObsMode = ObsMode.Flatten,
     ) -> None:
         super().__init__()
-        self.parcel_counter = 0
         self.step_counter = 0
+        self.parcel_counter = 0
         self.n_steps = n_steps
         self.n_shuttles = n_shuttles
         n_rays: int = 2 if is_double_line else 1
@@ -108,7 +108,7 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
             line_node.parcel = None
         _ = sprites.Parcel(self.map.line_nodes[f"1.{-1}"])
         self.render()
-        obs = self._make_observation()
+        obs = self.__make_observation()
         info: dict[str, Any] = {}
         return obs, info
 
@@ -130,7 +130,7 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
             if result.movements:
                 reward_a[i] = result.reward
                 shuttle_movements.extend(result.movements)
-        self._simulate_movement(shuttle_movements)
+        self.__simulate_movement(shuttle_movements)
         # TODO: If we want parcel movement is parallel with shuttle movement,
         # we have to add new action. Pick or drop parcel right away after shuttle movement
         # and simulate all is not right because the target which sprite move to cann't move
@@ -146,10 +146,10 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
                 self.parcel_counter += 1
                 reward_a[i] = result.reward
                 parcel_movements.extend(result.movements)
-        self._simulate_movement(parcel_movements)
+        self.__simulate_movement(parcel_movements)
 
         self.step_counter += 1
-        obs = self._make_observation()
+        obs = self.__make_observation()
         termination = self.parcel_counter == self.map.n_line_nodes
         truncation = self.step_counter == self.n_steps
         info: dict[str, Any] = {}
@@ -165,17 +165,17 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
     def render(self):
         if self.screen and self.clock:
             self.clock.tick(self.metadata["render_fps"])
-            self._render_to_surface(self.screen)
+            self.__render_to_surface(self.screen)
             pygame.display.update()
 
-    def _make_observation(self):
+    def __make_observation(self):
         match self.obs_mode:
             case ObsMode.Flatten:
                 line_nodes_states: list[float] = []
                 for line_node in self.map.line_nodes.values():
                     if not line_node.is_depalletized and not line_node.is_palletized:
                         if line_node.parcel:
-                            line_nodes_states.append(1.0 if line_node.parcel.is_requested else 0.5)
+                            line_nodes_states.append(1.0)
                         else:
                             line_nodes_states.append(0.0)
                 # obs <==> obs_a_o
@@ -200,7 +200,7 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
         mask_a_ac = np.vstack([shuttle.mask for shuttle in self.shuttles])
         return Observation(obs, mask_a_ac)
 
-    def _simulate_movement(self, movements: list[Movement]):
+    def __simulate_movement(self, movements: list[Movement]):
         if self.screen and self.clock:
             not_reaches = [True] * len(movements)
             while any(not_reaches):
@@ -219,7 +219,7 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
                             movement.sprite.world_translate(
                                 direction.normalize() * step
                             )
-                self._render_to_surface(self.screen)
+                self.__render_to_surface(self.screen)
                 pygame.display.update()
         elif (
             self.obs_mode == ObsMode.ResizedWindow
@@ -230,7 +230,7 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
 
     def __create_obs_img(self):
         surf = pygame.Surface(self.map.image.get_size())
-        self._render_to_surface(surf)
+        self.__render_to_surface(surf)
         scaled_screen = pygame.transform.smoothscale(surf, STATE_SIZE)
         # Transpose to torch convention dimension order (C, H, W)
         arr_c_h_w = np.transpose(
@@ -244,14 +244,14 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
 
     def __create_frame(self):
         surf = pygame.Surface(self.map.image.get_size())
-        self._render_to_surface(surf)
+        self.__render_to_surface(surf)
         scaled_screen = pygame.transform.smoothscale(surf, surf.get_size())
         # Transpose to dimension order (W, H, C)
         return np.transpose(
             np.array(pygame.surfarray.pixels3d(scaled_screen)), axes=(1, 0, 2)
         )
 
-    def _render_to_surface(self, surface: pygame.Surface):
+    def __render_to_surface(self, surface: pygame.Surface):
         surface.blit(self.map.image, (0, 0))
         for shuttle in self.shuttles:
             shuttle.draw(surface)
@@ -262,7 +262,7 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
 
 if __name__ == "__main__":
     pygame.init()
-    env = Warehouse(2, 2, 2, 2, True, 200, 4, RenderMode.Human, ObsMode.Flatten)
+    env = Warehouse(2, 2, 3, 3, True, 200, 3, RenderMode.Human, ObsMode.Flatten)
     obs, info = env.reset()
     done = False
     running = True
@@ -273,7 +273,6 @@ if __name__ == "__main__":
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_r:
                     env.reset()
-        env.render()
         mask_a_ac = obs.mask
         action_a: list[int] = []
         for mask_ac in mask_a_ac:

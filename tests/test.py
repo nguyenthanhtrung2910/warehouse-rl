@@ -11,14 +11,14 @@ from warehouse_rl.agents import OffPolicyAgent
 # from warehouse_rl.networks import Conv
 from warehouse_rl.enums import RenderMode
 
-# from warehouse_rl.warehouse import Warehouse
+from warehouse_rl.warehouse import Warehouse
 from warehouse_rl.warehouse_b import WarehouseB
 
-n_agents = 4
+n_agents = 3
 net = Net(
-    state_shape=19,
+    state_shape=36 + 3,
     action_shape=4,
-    hidden_sizes=[1024, 1024, 512, 512, 256, 256, 128, 128,1 64, 64],
+    hidden_sizes=[1024, 1024, 512, 512, 256, 256, 128, 128, 64, 64],
     norm_layer=torch.nn.LayerNorm,
     activation=torch.nn.ReLU,
     dueling_param=(
@@ -31,12 +31,12 @@ policy = DiscreteQLearningPolicy(
 )
 policy.load_state_dict(
     torch.load(
-        os.path.join(os.getcwd(), "ckpt", "best.pth"),
+        os.path.join(os.getcwd(), "ckpt/a", "best.pth"),
         weights_only=True,
     )
 )
 
-env = WarehouseB(2, 2, 2, 2, True, 500, n_agents, 12, 4, render_mode=RenderMode.Human)
+env = Warehouse(2, 2, 3, 3, True, 750, n_agents, render_mode=RenderMode.Human)
 obs, _ = env.reset()
 
 done = False

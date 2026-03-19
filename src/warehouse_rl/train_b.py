@@ -16,9 +16,9 @@ from warehouse_rl.agents import DecentralizedTrainer, OffPolicyAgent
 from warehouse_rl.warehouse_b import WarehouseB
 
 
-n_agents = 4
+n_agents = 3
 net = Net(
-    state_shape=19,
+    state_shape=36 + 3,
     action_shape=4,
     hidden_sizes=[1024, 1024, 512, 512, 256, 256, 128, 128, 64, 64],
     norm_layer=torch.nn.LayerNorm,
@@ -40,7 +40,7 @@ algorithm = DQN(
     is_double=True,
 )
 memory = PrioritizedVectorReplayBuffer(
-    total_size=250_000 * n_agents,
+    total_size=500_000 * n_agents,
     buffer_num=16 * n_agents,
     alpha=0.6,
     beta=0.4,
@@ -64,9 +64,9 @@ def natural_exponential_annealing(
     return lambda episode: end + (begin - end) * math.exp(-rate * episode)
 
 
-eps_schedule = exponential_annealing(1.0, 0.05, 0.995)
-beta_schedule = natural_exponential_annealing(0.4, 1.0, 0.01)
-ckpt_dir = "ckpt"
+eps_schedule = exponential_annealing(1.0, 0.05, 0.997)
+beta_schedule = natural_exponential_annealing(0.4, 1.0, 0.006)
+ckpt_dir = "ckpt/b"
 os.makedirs(os.path.join(os.getcwd(), ckpt_dir), exist_ok=True)
 
 
@@ -86,17 +86,17 @@ def save_best_fn(episode: int) -> None:
 
 
 train_env = DummyVectorEnv(
-    [lambda: WarehouseB(2, 2, 2, 2, True, 500, n_agents, 12, 4) for _ in range(16)]
+    [lambda: WarehouseB(2, 2, 3, 3, True, 750, n_agents, 20, 6) for _ in range(16)]
 )
 test_env = DummyVectorEnv(
-    [lambda: WarehouseB(2, 2, 2, 2, True, 500, n_agents, 12, 4) for _ in range(16)]
+    [lambda: WarehouseB(2, 2, 3, 3, True, 750, n_agents, 20, 6) for _ in range(16)]
 )
 
 trainer = DecentralizedTrainer(
     batch_size=64,
     update_freq=200,
     test_freq=50,
-    n_training_episodes=500,
+    n_training_episodes=1000,
     n_testing_episodes=32,
     train_fn=train_fn,
     save_last_fn=save_last_fn,

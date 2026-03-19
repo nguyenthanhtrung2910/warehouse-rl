@@ -15,12 +15,11 @@ from tianshou.utils.net.common import Net
 from warehouse_rl.agents import DecentralizedTrainer, OffPolicyAgent
 from warehouse_rl.warehouse import Warehouse
 
-
-n_agents = 4
+n_agents = 3
 net = Net(
-    state_shape=19,
+    state_shape=36 + 3,
     action_shape=4,
-    hidden_sizes=[1024, 1024, 512, 512, 256, 256, 128, 64],
+    hidden_sizes=[1024, 1024, 512, 512, 256, 256, 128, 128, 64, 64],
     norm_layer=torch.nn.LayerNorm,
     activation=torch.nn.ReLU,
     dueling_param=(
@@ -66,7 +65,7 @@ def natural_exponential_annealing(
 
 eps_schedule = exponential_annealing(1.0, 0.05, 0.995)
 beta_schedule = natural_exponential_annealing(0.4, 1.0, 0.01)
-ckpt_dir = "ckpt"
+ckpt_dir = "ckpt/a"
 os.makedirs(os.path.join(os.getcwd(), ckpt_dir), exist_ok=True)
 
 
@@ -86,10 +85,10 @@ def save_best_fn(episode: int) -> None:
 
 
 train_env = DummyVectorEnv(
-    [lambda: Warehouse(2, 2, 2, 2, True, 500, n_agents) for _ in range(16)]
+    [lambda: Warehouse(2, 2, 3, 3, True, 700, n_agents) for _ in range(16)]
 )
 test_env = DummyVectorEnv(
-    [lambda: Warehouse(2, 2, 2, 2, True, 500, n_agents) for _ in range(16)]
+    [lambda: Warehouse(2, 2, 3, 3, True, 700, n_agents) for _ in range(16)]
 )
 
 trainer = DecentralizedTrainer(

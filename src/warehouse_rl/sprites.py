@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import override
 
 import numpy as np
+import numpy.typing as npt
 import pygame
 from pygame.math import Vector2
 
@@ -139,16 +140,9 @@ class Shuttle(Sprite):
         )
 
     @property
-    def state(self):
-        has_parcel = 1 if self.parcel else 0
-        return np.array(
-            [
-                self.pos.x / self.map_size.x,
-                self.pos.y / self.map_size.y,
-                has_parcel,
-            ],
-            dtype=np.float32,
-        )
+    @abstractmethod
+    def state(self) -> npt.NDArray[np.float32]:
+        pass
 
     def reset(self, pos: map.RayNode):
         self.pos.robot = None
@@ -280,6 +274,19 @@ class Loader(Shuttle):
                 [warehouse.Movement(current.parcel, current.world_pos)],
             )
         return StepResult(0.0, None)
+    
+    @property
+    @override
+    def state(self):
+        has_parcel = 1.0 if self.parcel else 0.0
+        return np.array(
+            [
+                self.pos.x / self.map_size.x,
+                self.pos.y / self.map_size.y,
+                has_parcel,
+            ],
+            dtype=np.float32,
+        )
 
 
 class Picker(Shuttle):
