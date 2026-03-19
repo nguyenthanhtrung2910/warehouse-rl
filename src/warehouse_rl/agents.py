@@ -6,8 +6,8 @@ import warnings
 from typing import Any, Callable, TypeVar, cast
 
 import matplotlib.pyplot as plt
-import numpy.typing as npt
 import numpy as np
+import numpy.typing as npt
 import torch
 from tianshou.algorithm.modelfree.dqn import DQN, DiscreteQLearningPolicy
 from tianshou.data import Batch
@@ -41,7 +41,6 @@ class OffPolicyAgent:
         self.algorithm = algorithm
         self.memory = memory
         self.gradient_steps_per_env_step = gradient_steps_per_env_step
-
         # Policy should be always in eval mode to inference action
         # Training mode is turned on only within context manager
         self.algorithm.policy.eval()
@@ -135,7 +134,7 @@ class OffPolicyAgent:
             warnings.warn("Agent has no memory, nothing is updated.")
 
 
-class Trainer:
+class DecentralizedTrainer:
     def __init__(
         self,
         batch_size: int = 64,
@@ -288,9 +287,6 @@ class Trainer:
         n_agents: int,
         agent: OffPolicyAgent,
     ) -> dict[str, Any]:
-        # E - number of enviroments
-        # O - observation-vector size
-        # A - number actions
         num_collected_steps = 0
         num_collected_episodes = 0
         num_envs = test_env.env_num
