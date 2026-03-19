@@ -8,7 +8,6 @@ from tianshou.utils.net.common import Net
 
 from warehouse_rl.agents import OffPolicyAgent
 
-# from warehouse_rl.networks import Conv
 from warehouse_rl.enums import RenderMode
 
 from warehouse_rl.warehouse import Warehouse
@@ -31,14 +30,24 @@ policy = DiscreteQLearningPolicy(
 )
 policy.load_state_dict(
     torch.load(
-        os.path.join(os.getcwd(), "ckpt/a", "best.pth"),
+        os.path.join(os.getcwd(), "ckpt/b", "best.pth"),
         weights_only=True,
     )
 )
-
-env = Warehouse(2, 2, 3, 3, True, 750, n_agents, render_mode=RenderMode.Human)
+env = WarehouseB(
+    2,
+    2,
+    3,
+    3,
+    True,
+    n_steps=500,
+    n_shuttles=n_agents,
+    n_parcels=20,
+    n_requested=6,
+    render_mode=RenderMode.Null,
+    recording=True,
+)
 obs, _ = env.reset()
-
 done = False
 re = np.zeros(n_agents)
 while not done:
@@ -47,4 +56,5 @@ while not done:
     re += reward
     obs = next_obs
     done = termination or truncation
+env.close()
 print(re.mean())

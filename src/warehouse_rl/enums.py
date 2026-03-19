@@ -11,7 +11,6 @@ class RenderMode(Enum):
 class ObsMode(Enum):
     Flatten = 0
     ResizedWindow = 1
-    FullWindow = 2
 
 
 class Direction(Enum):

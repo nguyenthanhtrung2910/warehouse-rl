@@ -4,6 +4,7 @@ import random
 from dataclasses import dataclass
 from typing import Any, override
 
+import cv2
 import numpy as np
 import numpy.typing as npt
 import pygame
@@ -46,6 +47,8 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
     obs_mode: ObsMode
     screen: pygame.Surface | None
     clock: pygame.time.Clock | None
+    __recording: bool
+    __writer: cv2.VideoWriter | None
     metadata: dict[str, Any] = {
         "render_modes": ["human"],
         "name": "warehouse",
@@ -64,6 +67,7 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
         n_shuttles: int,
         render_mode: RenderMode = RenderMode.Null,
         observation_mode: ObsMode = ObsMode.Flatten,
+        recording: bool = False,
     ) -> None:
         super().__init__()
         self.step_counter = 0
@@ -87,6 +91,22 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
                 pygame.display.set_caption("WAREHOUSE")
             case _:
                 raise ValueError(f"Invalid render_mode value: {render_mode}.")
+        self.recording = recording
+
+    @property
+    def recording(self):
+        return self.__recording
+
+    @recording.setter
+    def recording(self, recording: bool):
+        self.__recording = recording
+        if self.__recording:
+            fourcc = int(cv2.VideoWriter_fourcc(*"mp4v"))  # type: ignore
+            self.__writer = cv2.VideoWriter(
+                "warehouse.mp4", fourcc, 10, self.map.image.get_size()
+            )
+        else:
+            self.__writer = None
 
     @override
     def reset(
@@ -168,6 +188,11 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
             self.__render_to_surface(self.screen)
             pygame.display.update()
 
+    @override
+    def close(self) -> None:
+        if self.__writer:
+            self.__writer.release()
+
     def __make_observation(self):
         match self.obs_mode:
             case ObsMode.Flatten:
@@ -190,9 +215,6 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
             case ObsMode.ResizedWindow:
                 # TODO: obs <==> obs_a_c_h_w
                 obs = self.__create_obs_img()
-            case ObsMode.FullWindow:
-                # obs <==> obs_w_h_c
-                obs = self.__create_frame()
             case _:
                 raise ValueError(
                     f"Invalid render_mode value: {self.__observation_mode}."
@@ -201,14 +223,19 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
         return Observation(obs, mask_a_ac)
 
     def __simulate_movement(self, movements: list[Movement]):
-        if self.screen and self.clock:
+        # Simulate if rendering to screen or recording
+        if (self.screen and self.clock) or self.__recording:
             not_reaches = [True] * len(movements)
             while any(not_reaches):
                 for i, movement in enumerate(movements):
                     if not_reaches[i]:
                         direction = movement.target - movement.sprite.world_pos
                         distance = direction.length()
-                        dt = self.clock.tick(self.metadata["render_fps"]) / 1000
+                        dt = (
+                            self.clock.tick(self.metadata["render_fps"]) / 1000
+                            if self.clock
+                            else 1 / self.metadata["render_fps"]
+                        )
                         step = SPEED * dt
                         if distance <= step or distance == 0:
                             # Correct the final shuttle positions
@@ -219,12 +246,16 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
                             movement.sprite.world_translate(
                                 direction.normalize() * step
                             )
-                self.__render_to_surface(self.screen)
-                pygame.display.update()
-        elif (
-            self.obs_mode == ObsMode.ResizedWindow
-            or self.obs_mode == ObsMode.FullWindow
-        ):
+                surf = (
+                    self.screen
+                    if self.screen
+                    else pygame.Surface(self.map.image.get_size())
+                )
+                self.__render_to_surface(surf)
+                self.__write_frame(surf)
+                if self.screen and self.clock:
+                    pygame.display.update()
+        elif self.obs_mode == ObsMode.ResizedWindow:
             for movement in movements:
                 movement.sprite.world_pos = movement.target
 
@@ -242,14 +273,16 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
         # Min-max normalize per channel to [0,1]
         return (arr_c_h_w - min_val_c_h_w) / (max_val_c_h_w - min_val_c_h_w)
 
-    def __create_frame(self):
-        surf = pygame.Surface(self.map.image.get_size())
-        self.__render_to_surface(surf)
-        scaled_screen = pygame.transform.smoothscale(surf, surf.get_size())
-        # Transpose to dimension order (W, H, C)
-        return np.transpose(
-            np.array(pygame.surfarray.pixels3d(scaled_screen)), axes=(1, 0, 2)
-        )
+    def __write_frame(self, surface: pygame.Surface):
+        if self.__recording and self.__writer:
+            scaled_screen = pygame.transform.smoothscale(surface, surface.get_size())
+            # Transpose to dimension order (W, H, C)
+            frame = np.transpose(
+                np.array(pygame.surfarray.pixels3d(scaled_screen)), axes=(1, 0, 2)
+            )
+            # Convert RGB to BGR for OpenCV
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            self.__writer.write(frame)
 
     def __render_to_surface(self, surface: pygame.Surface):
         surface.blit(self.map.image, (0, 0))
@@ -262,7 +295,17 @@ class Warehouse(Env[Observation, npt.NDArray[np.integer]]):
 
 if __name__ == "__main__":
     pygame.init()
-    env = Warehouse(2, 2, 3, 3, True, 200, 3, RenderMode.Human, ObsMode.Flatten)
+    env = Warehouse(
+        2,
+        2,
+        3,
+        3,
+        True,
+        n_steps=200,
+        n_shuttles=3,
+        render_mode=RenderMode.Human,
+        recording=False
+    )
     obs, info = env.reset()
     done = False
     running = True
@@ -282,9 +325,10 @@ if __name__ == "__main__":
             else:
                 action_a.append(1)
         next_obs, reward_a, termination, truncation, info = env.step(np.array(action_a))
-        print(
-            f"In step {env.n_steps}: observation {obs.obs} action {action_a} reward {reward_a}"
-        )
+        # print(
+        #     f"In step {env.n_steps}: observation {obs.obs} action {action_a} reward {reward_a}"
+        # )
         obs = next_obs
         done = termination or truncation
+    env.close()
     pygame.quit()
