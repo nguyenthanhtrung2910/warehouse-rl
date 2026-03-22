@@ -274,7 +274,7 @@ class Loader(Shuttle):
                 [warehouse.Movement(current.parcel, current.world_pos)],
             )
         return StepResult(0.0, None)
-    
+
     @property
     @override
     def state(self):
@@ -369,7 +369,7 @@ class Picker(Shuttle):
     @override
     def state(self):
         if self.parcel:
-            has_parcel = 1.0 if self.parcel.is_requested else 0.5
+            has_parcel = 2 / 3 if self.parcel.is_requested else 1 / 3
         else:
             has_parcel = 0.0
         return np.array(

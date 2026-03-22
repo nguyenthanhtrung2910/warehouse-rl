@@ -1,42 +1,42 @@
 from __future__ import annotations
 
 import random
-from typing import Any, override
+import typing
 
 import cv2
+import gymnasium
+import gymnasium.core
 import numpy as np
-import numpy.typing as npt
 import pygame
-from gymnasium import spaces
-from gymnasium.core import Env
 
-from warehouse_rl import map, sprites
-from warehouse_rl.enums import (
-    STATE_SIZE,
-    Action,
-    ObsMode,
-    RenderMode,
-)
-from warehouse_rl.warehouse import Movement, Observation
+import warehouse_rl.enums
+import warehouse_rl.map
+import warehouse_rl.sprites
+import warehouse_rl.warehouse
 
 SPEED = 250
 
 
-class WarehouseB(Env[Observation, npt.NDArray[np.integer]]):
+class WarehouseB(
+    gymnasium.core.Env[
+        warehouse_rl.warehouse.Observation,
+        np.ndarray[tuple[typing.Any, ...], np.dtype[np.integer]],
+    ]
+):
     step_counter: int
     taken_parcel_counter: int
     n_steps: int
     n_shuttles: int
     n_parcels: int
     n_requested_parcels: int
-    map: map.WarehouseMap
-    shuttles: list[sprites.Shuttle]
-    obs_mode: ObsMode
+    map: warehouse_rl.map.WarehouseMap
+    shuttles: list[warehouse_rl.sprites.Shuttle]
+    obs_mode: warehouse_rl.enums.ObsMode
     screen: pygame.Surface | None
     clock: pygame.time.Clock | None
     __recording: bool
     __writer: cv2.VideoWriter | None
-    metadata: dict[str, Any] = {
+    metadata: dict[str, typing.Any] = {
         "render_modes": ["human"],
         "name": "warehouse",
         "is_parallelizable": True,
@@ -54,8 +54,8 @@ class WarehouseB(Env[Observation, npt.NDArray[np.integer]]):
         n_shuttles: int,
         n_parcels: int,
         n_requested: int,
-        render_mode: RenderMode = RenderMode.Null,
-        observation_mode: ObsMode = ObsMode.Flatten,
+        render_mode: warehouse_rl.enums.RenderMode = warehouse_rl.enums.RenderMode.Null,
+        observation_mode: warehouse_rl.enums.ObsMode = warehouse_rl.enums.ObsMode.Flatten,
         recording: bool = False,
     ) -> None:
         super().__init__()
@@ -66,17 +66,21 @@ class WarehouseB(Env[Observation, npt.NDArray[np.integer]]):
         self.n_parcels = n_parcels
         self.n_requested_parcels = n_requested
         n_rays: int = 2 if is_double_line else 1
-        self.map = map.WarehouseMap(n_rows, n_columns, n_subrows, n_lines, n_rays)
+        self.map = warehouse_rl.map.WarehouseMap(
+            n_rows, n_columns, n_subrows, n_lines, n_rays
+        )
         self.shuttles = []
         for ray_node in random.sample(list(self.map.ray_nodes.values()), n_shuttles):
-            self.shuttles.append(sprites.Picker(ray_node, self.map.map_size))
-        self.action_space = spaces.MultiDiscrete(np.full(n_shuttles, 4))
+            self.shuttles.append(
+                warehouse_rl.sprites.Picker(ray_node, self.map.map_size)
+            )
+        self.action_space = gymnasium.spaces.MultiDiscrete(np.full(n_shuttles, 4))
         self.obs_mode = observation_mode
         match render_mode:
-            case RenderMode.Null:
+            case warehouse_rl.enums.RenderMode.Null:
                 self.screen = None
                 self.clock = None
-            case RenderMode.Human:
+            case warehouse_rl.enums.RenderMode.Human:
                 self.screen = pygame.display.set_mode(self.map.image.get_size())
                 self.clock = pygame.time.Clock()
                 pygame.display.set_caption("WAREHOUSE")
@@ -85,11 +89,11 @@ class WarehouseB(Env[Observation, npt.NDArray[np.integer]]):
         self.recording = recording
 
     @property
-    def recording(self):
+    def recording(self) -> bool:
         return self.__recording
 
     @recording.setter
-    def recording(self, recording: bool):
+    def recording(self, recording: bool) -> None:
         self.__recording = recording
         if self.__recording:
             fourcc = int(cv2.VideoWriter_fourcc(*"mp4v"))  # type: ignore
@@ -99,13 +103,13 @@ class WarehouseB(Env[Observation, npt.NDArray[np.integer]]):
         else:
             self.__writer = None
 
-    @override
+    @typing.override
     def reset(
         self,
         *,
         seed: int | None = None,
-        options: dict[str, Any] | None = None,
-    ):
+        options: dict[str, typing.Any] | None = None,
+    ) -> tuple[warehouse_rl.warehouse.Observation, dict[str, typing.Any]]:
         if seed:
             random.seed(seed)
         self.step_counter = 0
@@ -117,16 +121,16 @@ class WarehouseB(Env[Observation, npt.NDArray[np.integer]]):
             shuttle.reset(ray_node)
         for line_node in self.map.line_nodes.values():
             line_node.parcel = None
-        center_line_nodes = [
+        center_line_nodes: list[warehouse_rl.map.LineNode] = [
             line_node
             for line_node in self.map.line_nodes.values()
             if not line_node.is_depalletized and not line_node.is_palletized
         ]
-        filled_line_nodes: list[map.LineNode] = random.sample(
+        filled_line_nodes: list[warehouse_rl.map.LineNode] = random.sample(
             center_line_nodes, self.n_parcels
         )
         for line_node in filled_line_nodes:
-            _ = sprites.Parcel(line_node, False)
+            _ = warehouse_rl.sprites.Parcel(line_node, False)
         for line_node in random.sample(filled_line_nodes, self.n_requested_parcels):
             if line_node.parcel:
                 line_node.parcel.is_requested = True
@@ -134,12 +138,20 @@ class WarehouseB(Env[Observation, npt.NDArray[np.integer]]):
             if ray_node.from_line and not ray_node.from_line.is_depalletized:
                 self.__downfall_parcel(ray_node.from_line)
         self.render()
-        obs = self.__make_observation()
-        info: dict[str, Any] = {}
+        obs: warehouse_rl.warehouse.Observation = self.__make_observation()
+        info: dict[str, typing.Any] = {}
         return obs, info
 
-    @override
-    def step(self, action: npt.NDArray[np.integer]):
+    @typing.override
+    def step(
+        self, action: np.ndarray[tuple[typing.Any, ...], np.dtype[np.integer]]
+    ) -> tuple[
+        warehouse_rl.warehouse.Observation,
+        np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]],
+        bool,
+        bool,
+        dict[str, typing.Any],
+    ]:
         if (
             self.taken_parcel_counter == self.n_requested_parcels
             or self.step_counter == self.n_steps
@@ -147,12 +159,14 @@ class WarehouseB(Env[Observation, npt.NDArray[np.integer]]):
             raise ValueError(
                 "The environment has ended. You have to reset it before step it further."
             )
-        reward_a = [0.0] * self.n_shuttles
+        reward_a: list[float] = [0.0] * self.n_shuttles
         # TODO: Moving shuttle by deterministic order is not close to parallelism.
         # Should we make movement order random?
-        shuttle_movements: list[Movement] = []
+        shuttle_movements: list[warehouse_rl.warehouse.Movement] = []
         for i, shuttle in enumerate(self.shuttles):
-            result = shuttle.step(Action(action[i]))
+            result: warehouse_rl.sprites.StepResult = shuttle.step(
+                warehouse_rl.enums.Action(action[i])
+            )
             if result.movements:
                 reward_a[i] = result.reward
                 shuttle_movements.extend(result.movements)
@@ -161,13 +175,13 @@ class WarehouseB(Env[Observation, npt.NDArray[np.integer]]):
         # we have to add new action. Pick or drop parcel right away after shuttle movement
         # and simulate all is not right because the target which sprite move to cann't move
         # during its movement.
-        parcel_movements: list[Movement] = []
+        parcel_movements: list[warehouse_rl.warehouse.Movement] = []
         for i, shuttle in enumerate(self.shuttles):
-            result = shuttle.pick_up()
+            result: warehouse_rl.sprites.StepResult = shuttle.pick_up()
             if result.movements:
                 reward_a[i] = result.reward
                 parcel_movements.extend(result.movements)
-            result = shuttle.drop_off()
+            result: warehouse_rl.sprites.StepResult = shuttle.drop_off()
             if result.movements:
                 reward_a[i] = result.reward
                 parcel_movements.extend(result.movements)
@@ -176,10 +190,10 @@ class WarehouseB(Env[Observation, npt.NDArray[np.integer]]):
             self.taken_parcel_counter += 1
             self.map.palletized_node.parcel = None
         self.step_counter += 1
-        obs = self.__make_observation()
-        termination = self.taken_parcel_counter == self.n_requested_parcels
-        truncation = self.step_counter == self.n_steps
-        info: dict[str, Any] = {}
+        obs: warehouse_rl.warehouse.Observation = self.__make_observation()
+        termination: bool = self.taken_parcel_counter == self.n_requested_parcels
+        truncation: bool = self.step_counter == self.n_steps
+        info: dict[str, typing.Any] = {}
         return (
             obs,
             np.array(reward_a),
@@ -188,41 +202,41 @@ class WarehouseB(Env[Observation, npt.NDArray[np.integer]]):
             info,
         )
 
-    @override
-    def render(self):
+    @typing.override
+    def render(self) -> None:
         if self.screen and self.clock:
             self.clock.tick(self.metadata["render_fps"])
             self.__render_to_surface(self.screen)
             pygame.display.update()
 
-    @override
+    @typing.override
     def close(self) -> None:
         if self.__writer:
             self.__writer.release()
 
-    def __downfall_parcel(self, from_line: map.LineNode):
-        filled_line_nodes: list[map.LineNode] = []
-        current = from_line
+    def __downfall_parcel(self, from_line: warehouse_rl.map.LineNode) -> None:
+        filled_line_nodes: list[warehouse_rl.map.LineNode] = []
+        current: warehouse_rl.map.LineNode = from_line
         while True:
             if current.parcel:
                 filled_line_nodes.append(current)
             if not current.previous_node:
                 break
-            current = current.previous_node
-        current = from_line
+            current: warehouse_rl.map.LineNode = current.previous_node
+        current: warehouse_rl.map.LineNode = from_line
         for filled_node in filled_line_nodes:
             if filled_node is not current:
                 current.parcel = filled_node.parcel
                 current.parcel.world_pos = current.world_pos  # type: ignore
                 filled_node.parcel = None
             if current.previous_node:
-                current = current.previous_node
+                current: warehouse_rl.map.LineNode = current.previous_node
             else:
                 break
 
-    def __make_observation(self):
+    def __make_observation(self) -> warehouse_rl.warehouse.Observation:
         match self.obs_mode:
-            case ObsMode.Flatten:
+            case warehouse_rl.enums.ObsMode.Flatten:
                 line_nodes_states: list[float] = []
                 for line_node in self.map.line_nodes.values():
                     if not line_node.is_depalletized and not line_node.is_palletized:
@@ -235,37 +249,45 @@ class WarehouseB(Env[Observation, npt.NDArray[np.integer]]):
                 # obs <==> obs_a_o
                 # TODO: Should we add at least state of arounding shuttles to each
                 # shuttle's observation? For centralized training?
-                obs = np.vstack(
-                    [
-                        np.hstack((shuttle.state, np.array(line_nodes_states)))
-                        for shuttle in self.shuttles
-                    ]
+                obs: np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]] = (
+                    np.vstack(
+                        [
+                            np.hstack((shuttle.state, np.array(line_nodes_states)))
+                            for shuttle in self.shuttles
+                        ]
+                    )
                 )
-            case ObsMode.ResizedWindow:
+            case warehouse_rl.enums.ObsMode.ResizedWindow:
                 # TODO: obs <==> obs_a_c_h_w
                 obs = self.__create_obs_img()
             case _:
                 raise ValueError(
                     f"Invalid render_mode value: {self.__observation_mode}."
                 )
-        mask_a_ac = np.vstack([shuttle.mask for shuttle in self.shuttles])
-        return Observation(obs, mask_a_ac)
+        mask_a_ac: np.ndarray[tuple[typing.Any, ...], np.dtype[np.unsignedinteger]] = (
+            np.vstack([shuttle.mask for shuttle in self.shuttles])
+        )
+        return warehouse_rl.warehouse.Observation(obs, mask_a_ac)
 
-    def __simulate_movement(self, movements: list[Movement]):
+    def __simulate_movement(
+        self, movements: list[warehouse_rl.warehouse.Movement]
+    ) -> None:
         # Simulate if rendering to screen or recording
         if (self.screen and self.clock) or self.__recording:
-            not_reaches = [True] * len(movements)
+            not_reaches: list[bool] = [True] * len(movements)
             while any(not_reaches):
                 for i, movement in enumerate(movements):
                     if not_reaches[i]:
-                        direction = movement.target - movement.sprite.world_pos
-                        distance = direction.length()
-                        dt = (
+                        direction: pygame.Vector2 = (
+                            movement.target - movement.sprite.world_pos
+                        )
+                        distance: float = direction.length()
+                        dt: float | typing.Any = (
                             self.clock.tick(self.metadata["render_fps"]) / 1000
                             if self.clock
                             else 1 / self.metadata["render_fps"]
                         )
-                        step = SPEED * dt
+                        step: float | typing.Any = SPEED * dt
                         if distance <= step or distance == 0:
                             # Correct the final shuttle positions
                             movement.sprite.world_pos = movement.target
@@ -275,7 +297,7 @@ class WarehouseB(Env[Observation, npt.NDArray[np.integer]]):
                             movement.sprite.world_translate(
                                 direction.normalize() * step
                             )
-                surf = (
+                surf: pygame.Surface = (
                     self.screen
                     if self.screen
                     else pygame.Surface(self.map.image.get_size())
@@ -284,17 +306,21 @@ class WarehouseB(Env[Observation, npt.NDArray[np.integer]]):
                 self.__write_frame(surf)
                 if self.screen and self.clock:
                     pygame.display.update()
-        elif self.obs_mode == ObsMode.ResizedWindow:
+        elif self.obs_mode == warehouse_rl.enums.ObsMode.ResizedWindow:
             for movement in movements:
                 movement.sprite.world_pos = movement.target
 
     def __create_obs_img(self):
         surf = pygame.Surface(self.map.image.get_size())
         self.__render_to_surface(surf)
-        scaled_screen = pygame.transform.smoothscale(surf, STATE_SIZE)
+        scaled_screen: pygame.Surface = pygame.transform.smoothscale(
+            surf, warehouse_rl.enums.STATE_SIZE
+        )
         # Transpose to torch convention dimension order (C, H, W)
-        arr_c_h_w = np.transpose(
-            np.array(pygame.surfarray.pixels3d(scaled_screen)), axes=(2, 0, 1)
+        arr_c_h_w: np.ndarray[tuple[typing.Any, ...], np.dtype[np.unsignedinteger]] = (
+            np.transpose(
+                np.array(pygame.surfarray.pixels3d(scaled_screen)), axes=(2, 0, 1)
+            )
         )
         # Compute per-channel min and max
         min_val_c_h_w = arr_c_h_w.min(axis=(1, 2), keepdims=True)
@@ -302,18 +328,28 @@ class WarehouseB(Env[Observation, npt.NDArray[np.integer]]):
         # Min-max normalize per channel to [0,1]
         return (arr_c_h_w - min_val_c_h_w) / (max_val_c_h_w - min_val_c_h_w)
 
-    def __write_frame(self, surface: pygame.Surface):
+    def __write_frame(self, surface: pygame.Surface) -> None:
         if self.__recording and self.__writer:
-            scaled_screen = pygame.transform.smoothscale(surface, surface.get_size())
+            scaled_screen: pygame.Surface = pygame.transform.smoothscale(
+                surface, surface.get_size()
+            )
             # Transpose to dimension order (W, H, C)
-            frame = np.transpose(
-                np.array(pygame.surfarray.pixels3d(scaled_screen)), axes=(1, 0, 2)
+            frame: np.ndarray[tuple[typing.Any, ...], np.dtype[np.unsignedinteger]] = (
+                np.transpose(
+                    np.array(pygame.surfarray.pixels3d(scaled_screen)), axes=(1, 0, 2)
+                )
             )
             # Convert RGB to BGR for OpenCV
-            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            self.__writer.write(frame)
+            frame_gbr: (
+                cv2.Mat
+                | np.ndarray[
+                    tuple[typing.Any, ...],
+                    np.dtype[np.integer | np.floating],
+                ]
+            ) = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            self.__writer.write(frame_gbr)
 
-    def __render_to_surface(self, surface: pygame.Surface):
+    def __render_to_surface(self, surface: pygame.Surface) -> None:
         surface.blit(self.map.image, (0, 0))
         for shuttle in self.shuttles:
             shuttle.draw(surface)
@@ -334,7 +370,7 @@ if __name__ == "__main__":
         n_shuttles=3,
         n_parcels=20,
         n_requested=6,
-        render_mode=RenderMode.Human,
+        render_mode=warehouse_rl.enums.RenderMode.Human,
     )
     obs, info = env.reset()
     done = False
@@ -346,10 +382,10 @@ if __name__ == "__main__":
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_r:
                     env.reset()
-        mask_a_ac = obs.mask
+        mask_a_ac: np.ndarray[tuple[typing.Any, ...], np.dtype[np.integer]] = obs.mask
         action_a: list[int] = []
         for mask_ac in mask_a_ac:
-            legal_action_ac = [i for i, v in enumerate(mask_ac) if v]
+            legal_action_ac: list[int] = [i for i, v in enumerate(mask_ac) if v]
             if len(legal_action_ac) != 0:
                 action_a.append(random.choice(legal_action_ac))
             else:
@@ -358,7 +394,7 @@ if __name__ == "__main__":
         # print(
         #     f"In step {env.n_steps}: observation {obs.obs} action {action_a} reward {reward_a}"
         # )
-        obs = next_obs
-        done = termination or truncation
+        obs: warehouse_rl.warehouse.Observation = next_obs
+        done: bool = termination or truncation
     env.close()
     pygame.quit()

@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from typing import Any
+import typing
 
 import numpy as np
+import tianshou.utils.net.common
+import tianshou.utils.torch_utils
 import torch
 import torch.nn as nn
-from tianshou.utils.net.common import Net
-from tianshou.utils.torch_utils import torch_device
 
 
 class Conv(nn.Module):
-    def __init__(self, in_channels: int = 3):
+    def __init__(self, in_channels: int = 3) -> None:
         super(Conv, self).__init__()
 
         self.features = nn.Sequential(
@@ -34,7 +34,7 @@ class Conv(nn.Module):
         )
 
         # Fully connected
-        self.fc = Net(
+        self.fc = tianshou.utils.net.common.Net(
             state_shape=32 * 4 * 4,
             action_shape=4,
             hidden_sizes=[1024, 1024, 512, 512, 256, 256, 128, 64],
@@ -49,10 +49,10 @@ class Conv(nn.Module):
     def forward(
         self,
         obs: np.ndarray | torch.Tensor,
-        state: Any = None,
-        info: dict[str, Any] | None = None,
-    ):
-        device = torch_device(self)
+        state: typing.Any = None,
+        info: dict[str, typing.Any] | None = None,
+    ) -> tuple[typing.Any, typing.Any]:
+        device: torch.device = tianshou.utils.torch_utils.torch_device(self)
         obs = torch.as_tensor(obs, device=device, dtype=torch.float32)
         x = self.features(obs)
         logits, _ = self.fc(x)

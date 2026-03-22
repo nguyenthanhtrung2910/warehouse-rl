@@ -2,24 +2,21 @@ from __future__ import annotations
 
 import os
 import time
+import typing
 import warnings
-from typing import Any, Callable, TypeVar, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
+import tianshou.algorithm.modelfree.dqn
+import tianshou.data
+import tianshou.data.buffer.vecbuf
+import tianshou.data.types
+import tianshou.env
+import tianshou.utils.torch_utils
 import torch
-from tianshou.algorithm.modelfree.dqn import DQN, DiscreteQLearningPolicy
-from tianshou.data import Batch
-from tianshou.data.buffer.vecbuf import PrioritizedVectorReplayBuffer
-from tianshou.data.types import ObsBatchProtocol, RolloutBatchProtocol
-from tianshou.env import DummyVectorEnv
-from tianshou.utils.torch_utils import (
-    policy_within_training_step,
-    torch_train_mode,
-)
 
-TNet = TypeVar("TNet", bound=torch.nn.Module)
+TNet = typing.TypeVar("TNet", bound=torch.nn.Module)
 
 # Common array size convention
 # E - number of enviroments
@@ -34,19 +31,21 @@ TNet = TypeVar("TNet", bound=torch.nn.Module)
 class OffPolicyAgent:
     def __init__(
         self,
-        algorithm: DQN[DiscreteQLearningPolicy[TNet]],
-        memory: PrioritizedVectorReplayBuffer | None = None,
+        algorithm: tianshou.algorithm.modelfree.dqn.DQN[
+            tianshou.algorithm.modelfree.dqn.DiscreteQLearningPolicy[TNet]
+        ],
+        memory: tianshou.data.buffer.vecbuf.PrioritizedVectorReplayBuffer | None = None,
         gradient_steps_per_env_step: float = 1.0,
     ) -> None:
         self.algorithm = algorithm
-        self.memory = memory
-        self.gradient_steps_per_env_step = gradient_steps_per_env_step
+        self.memory: tianshou.data.PrioritizedVectorReplayBuffer | None = memory
+        self.gradient_steps_per_env_step: float = gradient_steps_per_env_step
         # Policy should be always in eval mode to inference action
         # Training mode is turned on only within context manager
         self.algorithm.policy.eval()
 
-    def policy_update_fn(self, batch_size: int, num_collected_steps: int):
-        num_gradient_steps = round(
+    def policy_update_fn(self, batch_size: int, num_collected_steps: int) -> int:
+        num_gradient_steps: int = round(
             self.gradient_steps_per_env_step * num_collected_steps
         )
         if num_gradient_steps == 0:
@@ -55,7 +54,7 @@ class OffPolicyAgent:
                 f"update_per_step={self.gradient_steps_per_env_step}",
             )
         if self.memory is not None:
-            with torch_train_mode(self.algorithm.policy):
+            with tianshou.utils.torch_utils.torch_train_mode(self.algorithm.policy):
                 for _ in range(num_gradient_steps):
                     self.algorithm.update(buffer=self.memory, sample_size=batch_size)
         else:
@@ -70,10 +69,17 @@ class OffPolicyAgent:
     ) -> npt.NDArray[np.int_]:
         e = obs_e_a_o.shape[0]
         a = obs_e_a_o.shape[1]
-        obs_b_o = obs_e_a_o.reshape(e * a, *obs_e_a_o.shape[2:])
-        mask_b_ac = mask_e_a_ac.reshape(e * a, mask_e_a_ac.shape[2])
-        obs_batch = cast(
-            ObsBatchProtocol, Batch(obs=Batch(obs=obs_b_o, mask=mask_b_ac), info=None)
+        obs_b_o: np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]] = (
+            obs_e_a_o.reshape(e * a, *obs_e_a_o.shape[2:])
+        )
+        mask_b_ac: np.ndarray[tuple[int, int], np.dtype[np.unsignedinteger]] = (
+            mask_e_a_ac.reshape(e * a, mask_e_a_ac.shape[2])
+        )
+        obs_batch: tianshou.data.types.ObsBatchProtocol = typing.cast(
+            tianshou.data.types.ObsBatchProtocol,
+            tianshou.data.Batch(
+                obs=tianshou.data.Batch(obs=obs_b_o, mask=mask_b_ac), info=None
+            ),
         )
         with torch.no_grad():
             act_b = self.algorithm.policy(obs_batch).act
@@ -83,13 +89,16 @@ class OffPolicyAgent:
 
     @staticmethod
     def get_act(
-        policy: DiscreteQLearningPolicy[TNet],
+        policy: tianshou.algorithm.modelfree.dqn.DiscreteQLearningPolicy[TNet],
         obs_a_o: npt.NDArray[np.float32],
         mask_a_ac: npt.NDArray[np.uint8],
         exploration_noise: bool,
     ):
-        obs_batch = cast(
-            ObsBatchProtocol, Batch(obs=Batch(obs=obs_a_o, mask=mask_a_ac), info=None)
+        obs_batch: tianshou.data.types.ObsBatchProtocol = typing.cast(
+            tianshou.data.types.ObsBatchProtocol,
+            tianshou.data.Batch(
+                obs=tianshou.data.Batch(obs=obs_a_o, mask=mask_a_ac), info=None
+            ),
         )
         with torch.no_grad():
             act_a = policy(obs_batch).act
@@ -110,16 +119,28 @@ class OffPolicyAgent:
         if self.memory is not None:
             e = obs_e_a_o.shape[0]
             a = obs_e_a_o.shape[1]
-            obs_b_o = obs_e_a_o.reshape(e * a, *obs_e_a_o.shape[2:])
-            info_b = np.repeat(info_e, a)
-            obs_next_b_o = obs_next_e_a_o.reshape(e * a, *obs_next_e_a_o.shape[2:])
-            act_b = act_e_a.reshape(e * a)
-            rew_b = rew_e_a.reshape(e * a)
-            termination_b = np.repeat(termination_e, a)
-            truncation_b = np.repeat(truncation_e, a)
-            rollout = cast(
-                RolloutBatchProtocol,
-                Batch(
+            obs_b_o: np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]] = (
+                obs_e_a_o.reshape(e * a, *obs_e_a_o.shape[2:])
+            )
+            info_b: np.ndarray[tuple[int], np.dtype[np.object_]] = np.repeat(info_e, a)
+            obs_next_b_o: np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]] = (
+                obs_next_e_a_o.reshape(e * a, *obs_next_e_a_o.shape[2:])
+            )
+            act_b: np.ndarray[tuple[typing.Any, ...], np.dtype[np.signedinteger]] = (
+                act_e_a.reshape(e * a)
+            )
+            rew_b: np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]] = (
+                rew_e_a.reshape(e * a)
+            )
+            termination_b: np.ndarray[tuple[int], np.dtype[np.bool]] = np.repeat(
+                termination_e, a
+            )
+            truncation_b: np.ndarray[tuple[int], np.dtype[np.bool]] = np.repeat(
+                truncation_e, a
+            )
+            rollout: tianshou.data.types.RolloutBatchProtocol = typing.cast(
+                tianshou.data.types.RolloutBatchProtocol,
+                tianshou.data.Batch(
                     obs=obs_b_o,
                     info=info_b,
                     obs_next=obs_next_b_o,
@@ -142,61 +163,72 @@ class DecentralizedTrainer:
         test_freq: int = 100,
         n_training_episodes: int = 5000,
         n_testing_episodes: int = 50,
-        train_fn: Callable[[int, int], None] | None = None,
-        test_fn: Callable[[int, int], None] | None = None,
-        save_best_fn: Callable[[int], None] | None = None,
-        save_last_fn: Callable[[], None] | None = None,
-        stop_fn: Callable[[float, int], bool] | None = None,
-        reward_metric: Callable[[np.ndarray], float] | None = None,
+        train_fn: typing.Callable[[int, int], None] | None = None,
+        test_fn: typing.Callable[[int, int], None] | None = None,
+        save_best_fn: typing.Callable[[int], None] | None = None,
+        save_last_fn: typing.Callable[[], None] | None = None,
+        stop_fn: typing.Callable[[float, int], bool] | None = None,
+        reward_metric: typing.Callable[[np.ndarray], float] | None = None,
     ) -> None:
-        self.batch_size = batch_size
-        self.update_freq = update_freq
-        self.test_freq = test_freq
-        self.n_training_episodes = n_training_episodes
-        self.n_testing_episodes = n_testing_episodes
-        self.train_fn = train_fn
-        self.test_fn = test_fn
-        self.save_best_fn = save_best_fn
-        self.save_last_fn = save_last_fn
-        self.stop_fn = stop_fn
-        self.reward_metric = reward_metric
+        self.batch_size: int = batch_size
+        self.update_freq: int = update_freq
+        self.test_freq: int = test_freq
+        self.n_training_episodes: int = n_training_episodes
+        self.n_testing_episodes: int = n_testing_episodes
+        self.train_fn: typing.Callable[[int, int], None] | None = train_fn
+        self.test_fn: typing.Callable[[int, int], None] | None = test_fn
+        self.save_best_fn: typing.Callable[[int], None] | None = save_best_fn
+        self.save_last_fn: typing.Callable[[], None] | None = save_last_fn
+        self.stop_fn: typing.Callable[[float, int], bool] | None = stop_fn
+        self.reward_metric: (
+            typing.Callable[
+                [np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]]], float
+            ]
+            | None
+        ) = reward_metric
 
     def train(
         self,
-        train_env: DummyVectorEnv,
-        test_env: DummyVectorEnv,
+        train_env: tianshou.env.DummyVectorEnv,
+        test_env: tianshou.env.DummyVectorEnv,
         agent: OffPolicyAgent,
         n_agents: int,
         plot: bool = False,
-    ) -> dict[str, Any]:
+    ) -> dict[str, typing.Any]:
         assert agent.memory is not None, "Learning agent must having a memory."
         assert train_env.env_num * n_agents == agent.memory.buffer_num
-        n_envs = train_env.env_num
+        n_envs: int = train_env.env_num
         n_collected_steps = 0
         n_collected_episodes = 0
         n_gradient_steps = 0
-        last_n_collected_steps = n_collected_steps
-        last_n_collected_episodes = n_collected_episodes
+        last_n_collected_steps: int = n_collected_steps
+        last_n_collected_episodes: int = n_collected_episodes
         # Lists of recorded data for plotting
         episodes: list[int] = []
         rewards: list[float] = [0.0]
-        start = time.time()
+        start: float = time.time()
         obs_e, _ = train_env.reset()
         while n_collected_episodes < self.n_training_episodes:
             if self.train_fn:
                 self.train_fn(n_collected_episodes, n_collected_steps)
             # Get observations from envs
-            obs_e_a_o = np.stack([obs.obs for obs in obs_e])
-            mask_e_a_ac = np.stack([obs.mask for obs in obs_e])
-            # Forward observations to agent
-            act_e_a = agent.get_act_batch(
-                obs_e_a_o, mask_e_a_ac, exploration_noise=True
+            obs_e_a_o: np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]] = np.stack(
+                [obs.obs for obs in obs_e]
             )
+            mask_e_a_ac: np.ndarray[tuple[typing.Any, ...], np.dtype[np.unsignedinteger]] = np.stack(
+                [obs.mask for obs in obs_e]
+            )
+            # Forward observations to agent
+            act_e_a: np.ndarray[
+                tuple[typing.Any, ...], np.dtype[np.integer]
+            ] = agent.get_act_batch(obs_e_a_o, mask_e_a_ac, exploration_noise=True)
             # Step in envs
             obs_next_e, rew_e_a, termination_e, truncation_e, info_e = train_env.step(
                 act_e_a
             )
-            obs_next_e_a_o = np.stack([obs.obs for obs in obs_next_e])
+            obs_next_e_a_o: np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]] = np.stack(
+                [obs.obs for obs in obs_next_e]
+            )
             # Add transitions to memories of all learning agents, only shared memory now
             agent.save_to_memory(
                 obs_e_a_o,
@@ -210,14 +242,16 @@ class DecentralizedTrainer:
             n_collected_steps += n_envs
             # Policy updating
             if (n_collected_steps - last_n_collected_steps) >= self.update_freq:
-                num_bonus_steps = n_collected_steps - last_n_collected_steps
-                with policy_within_training_step(agent.algorithm.policy):
+                num_bonus_steps: int = n_collected_steps - last_n_collected_steps
+                with tianshou.utils.torch_utils.policy_within_training_step(
+                    agent.algorithm.policy
+                ):
                     n_gradient_steps += agent.policy_update_fn(
                         self.batch_size, num_bonus_steps
                     )
-                last_n_collected_steps = n_collected_steps
+                last_n_collected_steps: int = n_collected_steps
             # Prepare new observation for next iteration
-            obs_e = obs_next_e
+            obs_e: np.ndarray[tuple[typing.Any, ...], np.dtype[typing.Any]] = obs_next_e
             # Reset ended envs
             done_e = termination_e | truncation_e
             id_d = np.where(done_e == True)[0]  # noqa: E712
@@ -226,7 +260,7 @@ class DecentralizedTrainer:
                 n_collected_episodes += id_d.size
             # Test
             if (n_collected_episodes - last_n_collected_episodes) >= self.test_freq:
-                test_stats = self.test(test_env, n_agents, agent)
+                test_stats: dict[str, typing.Any] = self.test(test_env, n_agents, agent)
                 num_steps, reward_metric = (
                     test_stats["mean_num_steps"],
                     test_stats["reward"],
@@ -244,11 +278,11 @@ class DecentralizedTrainer:
                         (n_collected_episodes), num_steps, reward_metric
                     )
                 )
-                last_n_collected_episodes = n_collected_episodes
+                last_n_collected_episodes: int = n_collected_episodes
                 # Break if reach required reward
                 if self.stop_fn and self.stop_fn(rewards[-1], n_collected_episodes):
                     break
-        finish = time.time()
+        finish: float = time.time()
         if self.save_last_fn:
             self.save_last_fn()
         if plot:
@@ -283,33 +317,39 @@ class DecentralizedTrainer:
 
     def test(
         self,
-        test_env: DummyVectorEnv,
+        test_env: tianshou.env.DummyVectorEnv,
         n_agents: int,
         agent: OffPolicyAgent,
-    ) -> dict[str, Any]:
+    ) -> dict[str, typing.Any]:
         num_collected_steps = 0
         num_collected_episodes = 0
-        num_envs = test_env.env_num
+        num_envs: int = test_env.env_num
         # Array of size number episodes that stores reward in that episode
         rewards_p_a: list[npt.NDArray[np.float32]] = []
-        rewards_e_a = np.zeros((num_envs, n_agents), dtype=np.float32)
+        rewards_e_a: np.ndarray[tuple[int, int], np.dtype[np.floating]] = (
+            np.zeros((num_envs, n_agents), dtype=np.float32)
+        )
         obs_e, _ = test_env.reset()
         while num_collected_episodes < self.n_testing_episodes:
             if self.test_fn:
                 self.test_fn(num_collected_episodes, num_collected_steps)
             # Get observations from envs
-            obs_e_a_o = np.stack([obs.obs for obs in obs_e])
-            mask_e_a_ac = np.stack([obs.mask for obs in obs_e])
-            # Forward observations to agent
-            act_e_a = agent.get_act_batch(
-                obs_e_a_o, mask_e_a_ac, exploration_noise=False
+            obs_e_a_o: np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]] = np.stack(
+                [obs.obs for obs in obs_e]
             )
+            mask_e_a_ac: np.ndarray[tuple[typing.Any, ...], np.dtype[np.unsignedinteger]] = np.stack(
+                [obs.mask for obs in obs_e]
+            )
+            # Forward observations to agent
+            act_e_a: np.ndarray[
+                tuple[typing.Any, ...], np.dtype[np.integer]
+            ] = agent.get_act_batch(obs_e_a_o, mask_e_a_ac, exploration_noise=False)
             # Step in envs
             obs_next_e, rew_e_a, termination_e, truncation_e, _ = test_env.step(act_e_a)
             num_collected_steps += num_envs
             rewards_e_a += rew_e_a
             # Prepare new observation for next iteration
-            obs_e = obs_next_e
+            obs_e: np.ndarray[tuple[typing.Any, ...], np.dtype[typing.Any]] = obs_next_e
             # Reset ended envs
             done_e = termination_e | truncation_e
             id_d = np.where(done_e == True)[0]  # noqa: E712
@@ -319,9 +359,11 @@ class DecentralizedTrainer:
                 # Save reward from ended envs and start new reward recording
                 rewards_p_a.append(rewards_e_a[id_d])
                 rewards_e_a[id_d] = 0
-        reward_p_a = np.vstack(rewards_p_a)
+        reward_p_a: np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]] = (
+            np.vstack(rewards_p_a)
+        )
         if self.reward_metric:
-            reward = self.reward_metric(reward_p_a)
+            reward: float = self.reward_metric(reward_p_a)
         else:
             reward = reward_p_a.mean()
         return {
