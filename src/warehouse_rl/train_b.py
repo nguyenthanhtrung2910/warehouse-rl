@@ -17,9 +17,9 @@ import warehouse_rl.warehouse_b
 
 n_agents = 3
 net = tianshou.utils.net.common.Net(
-    state_shape=36 + 3,
-    action_shape=4,
-    hidden_sizes=[1024, 1024, 512, 512, 256, 256, 128, 128, 64, 64],
+    state_shape=36 + 7,
+    action_shape=5,
+    hidden_sizes=[1024, 1024, 512, 512, 256, 256, 128, 128, 128, 64, 64, 64],
     norm_layer=torch.nn.LayerNorm,
     activation=torch.nn.ReLU,
     dueling_param=(
@@ -30,7 +30,7 @@ net = tianshou.utils.net.common.Net(
 policy: tianshou.algorithm.modelfree.dqn.DiscreteQLearningPolicy[
     tianshou.utils.net.common.Net
 ] = tianshou.algorithm.modelfree.dqn.DiscreteQLearningPolicy(
-    model=net, action_space=gymnasium.spaces.Discrete(4), eps_training=1.0
+    model=net, action_space=gymnasium.spaces.Discrete(5), eps_training=1.0
 )
 algorithm: tianshou.algorithm.modelfree.dqn.DQN[
     tianshou.algorithm.modelfree.dqn.DiscreteQLearningPolicy[
@@ -40,12 +40,12 @@ algorithm: tianshou.algorithm.modelfree.dqn.DQN[
     policy=policy,
     optim=tianshou.algorithm.optim.AdamOptimizerFactory(lr=0.0001),
     gamma=0.99,
-    n_step_return_horizon=20,
-    target_update_freq=400,
+    n_step_return_horizon=30,
+    target_update_freq=500,
     is_double=True,
 )
 memory = tianshou.data.buffer.vecbuf.PrioritizedVectorReplayBuffer(
-    total_size=500_000 * n_agents,
+    total_size=1_000_000 * n_agents,
     buffer_num=16 * n_agents,
     alpha=0.6,
     beta=0.4,
@@ -69,9 +69,9 @@ def natural_exponential_annealing(
     return lambda episode: end + (begin - end) * math.exp(-rate * episode)
 
 
-eps_schedule: typing.Callable[[int], float] = exponential_annealing(1.0, 0.05, 0.997)
+eps_schedule: typing.Callable[[int], float] = exponential_annealing(1.0, 0.05, 0.9985)
 beta_schedule: typing.Callable[[int], float] = natural_exponential_annealing(
-    0.4, 1.0, 0.006
+    0.4, 1.0, 0.003
 )
 ckpt_dir = "ckpt/b"
 os.makedirs(os.path.join(os.getcwd(), ckpt_dir), exist_ok=True)
@@ -113,11 +113,11 @@ trainer = warehouse_rl.agents.DecentralizedTrainer(
     batch_size=64,
     update_freq=200,
     test_freq=50,
-    n_training_episodes=1000,
-    n_testing_episodes=32,
+    n_training_episodes=2000,
+    n_testing_episodes=48,
     train_fn=train_fn,
     save_last_fn=save_last_fn,
     save_best_fn=save_best_fn,
 )
-
+algorithm.to("cuda")
 trainer.train(train_env, test_env, agent, n_agents, True)

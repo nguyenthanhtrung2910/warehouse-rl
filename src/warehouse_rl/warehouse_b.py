@@ -74,7 +74,7 @@ class WarehouseB(
             self.shuttles.append(
                 warehouse_rl.sprites.Picker(ray_node, self.map.map_size)
             )
-        self.action_space = gymnasium.spaces.MultiDiscrete(np.full(n_shuttles, 4))
+        self.action_space = gymnasium.spaces.MultiDiscrete(np.full(n_shuttles, 5))
         self.obs_mode = observation_mode
         match render_mode:
             case warehouse_rl.enums.RenderMode.Null:
@@ -167,8 +167,8 @@ class WarehouseB(
             result: warehouse_rl.sprites.StepResult = shuttle.step(
                 warehouse_rl.enums.Action(action[i])
             )
+            reward_a[i] += result.reward
             if result.movements:
-                reward_a[i] = result.reward
                 shuttle_movements.extend(result.movements)
         self.__simulate_movement(shuttle_movements)
         # TODO: If we want parcel movement is parallel with shuttle movement,
@@ -178,12 +178,12 @@ class WarehouseB(
         parcel_movements: list[warehouse_rl.warehouse.Movement] = []
         for i, shuttle in enumerate(self.shuttles):
             result: warehouse_rl.sprites.StepResult = shuttle.pick_up()
+            reward_a[i] += result.reward
             if result.movements:
-                reward_a[i] = result.reward
                 parcel_movements.extend(result.movements)
             result: warehouse_rl.sprites.StepResult = shuttle.drop_off()
+            reward_a[i] += result.reward
             if result.movements:
-                reward_a[i] = result.reward
                 parcel_movements.extend(result.movements)
         self.__simulate_movement(parcel_movements)
         if self.map.palletized_node.parcel:
@@ -391,9 +391,9 @@ if __name__ == "__main__":
             else:
                 action_a.append(1)
         next_obs, reward_a, termination, truncation, info = env.step(np.array(action_a))
-        # print(
-        #     f"In step {env.n_steps}: observation {obs.obs} action {action_a} reward {reward_a}"
-        # )
+        print(
+            f"In step {env.n_steps}: observation {obs.obs} action {action_a} reward {reward_a}"
+        )
         obs: warehouse_rl.warehouse.Observation = next_obs
         done: bool = termination or truncation
     env.close()

@@ -7,7 +7,6 @@ import warnings
 
 import matplotlib.pyplot as plt
 import numpy as np
-import numpy.typing as npt
 import tianshou.algorithm.modelfree.dqn
 import tianshou.data
 import tianshou.data.buffer.vecbuf
@@ -63,14 +62,14 @@ class OffPolicyAgent:
 
     def get_act_batch(
         self,
-        obs_e_a_o: npt.NDArray[np.float32],
-        mask_e_a_ac: npt.NDArray[np.uint8],
+        obs_e_a_o: np.ndarray[tuple[int, int, int], np.dtype[np.floating]],
+        mask_e_a_ac: np.ndarray[tuple[int, int, int], np.dtype[np.unsignedinteger]],
         exploration_noise: bool,
-    ) -> npt.NDArray[np.int_]:
+    ) -> np.ndarray[tuple[int, int], np.dtype[np.signedinteger]]:
         e = obs_e_a_o.shape[0]
         a = obs_e_a_o.shape[1]
-        obs_b_o: np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]] = (
-            obs_e_a_o.reshape(e * a, *obs_e_a_o.shape[2:])
+        obs_b_o: np.ndarray[tuple[int, int], np.dtype[np.floating]] = obs_e_a_o.reshape(
+            e * a, *obs_e_a_o.shape[2:]
         )
         mask_b_ac: np.ndarray[tuple[int, int], np.dtype[np.unsignedinteger]] = (
             mask_e_a_ac.reshape(e * a, mask_e_a_ac.shape[2])
@@ -90,8 +89,8 @@ class OffPolicyAgent:
     @staticmethod
     def get_act(
         policy: tianshou.algorithm.modelfree.dqn.DiscreteQLearningPolicy[TNet],
-        obs_a_o: npt.NDArray[np.float32],
-        mask_a_ac: npt.NDArray[np.uint8],
+        obs_a_o: np.ndarray[tuple[int, int], np.dtype[np.floating]],
+        mask_a_ac: np.ndarray[tuple[int, int], np.dtype[np.unsignedinteger]],
         exploration_noise: bool,
     ):
         obs_batch: tianshou.data.types.ObsBatchProtocol = typing.cast(
@@ -108,26 +107,26 @@ class OffPolicyAgent:
 
     def save_to_memory(
         self,
-        obs_e_a_o: npt.NDArray[np.float32],
-        info_e: npt.NDArray[np.object_],
-        obs_next_e_a_o: npt.NDArray[np.float32],
-        act_e_a: npt.NDArray[np.int_],
-        rew_e_a: npt.NDArray[np.float32],
-        termination_e: npt.NDArray[np.bool_],
-        truncation_e: npt.NDArray[np.bool_],
+        obs_e_a_o: np.ndarray[tuple[int, int, int], np.dtype[np.floating]],
+        info_e: np.ndarray[tuple[int], np.dtype[np.object_]],
+        obs_next_e_a_o: np.ndarray[tuple[int, int, int], np.dtype[np.floating]],
+        act_e_a: np.ndarray[tuple[int, int], np.dtype[np.signedinteger]],
+        rew_e_a: np.ndarray[tuple[int, int], np.dtype[np.floating]],
+        termination_e: np.ndarray[tuple[int], np.dtype[np.bool]],
+        truncation_e: np.ndarray[tuple[int], np.dtype[np.bool]],
     ) -> None:
         if self.memory is not None:
             e = obs_e_a_o.shape[0]
             a = obs_e_a_o.shape[1]
-            obs_b_o: np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]] = (
+            obs_b_o: np.ndarray[tuple[int, int], np.dtype[np.floating]] = (
                 obs_e_a_o.reshape(e * a, *obs_e_a_o.shape[2:])
             )
             info_b: np.ndarray[tuple[int], np.dtype[np.object_]] = np.repeat(info_e, a)
             obs_next_b_o: np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]] = (
                 obs_next_e_a_o.reshape(e * a, *obs_next_e_a_o.shape[2:])
             )
-            act_b: np.ndarray[tuple[typing.Any, ...], np.dtype[np.signedinteger]] = (
-                act_e_a.reshape(e * a)
+            act_b: np.ndarray[tuple[int], np.dtype[np.signedinteger]] = act_e_a.reshape(
+                e * a
             )
             rew_b: np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]] = (
                 rew_e_a.reshape(e * a)
@@ -181,9 +180,7 @@ class DecentralizedTrainer:
         self.save_last_fn: typing.Callable[[], None] | None = save_last_fn
         self.stop_fn: typing.Callable[[float, int], bool] | None = stop_fn
         self.reward_metric: (
-            typing.Callable[
-                [np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]]], float
-            ]
+            typing.Callable[[np.ndarray[tuple[int, int], np.dtype[np.floating]]], float]
             | None
         ) = reward_metric
 
@@ -212,23 +209,23 @@ class DecentralizedTrainer:
             if self.train_fn:
                 self.train_fn(n_collected_episodes, n_collected_steps)
             # Get observations from envs
-            obs_e_a_o: np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]] = np.stack(
-                [obs.obs for obs in obs_e]
+            obs_e_a_o: np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]] = (
+                np.stack([obs.obs for obs in obs_e])
             )
-            mask_e_a_ac: np.ndarray[tuple[typing.Any, ...], np.dtype[np.unsignedinteger]] = np.stack(
-                [obs.mask for obs in obs_e]
-            )
+            mask_e_a_ac: np.ndarray[
+                tuple[typing.Any, ...], np.dtype[np.unsignedinteger]
+            ] = np.stack([obs.mask for obs in obs_e])
             # Forward observations to agent
-            act_e_a: np.ndarray[
-                tuple[typing.Any, ...], np.dtype[np.integer]
-            ] = agent.get_act_batch(obs_e_a_o, mask_e_a_ac, exploration_noise=True)
+            act_e_a: np.ndarray[tuple[typing.Any, ...], np.dtype[np.integer]] = (
+                agent.get_act_batch(obs_e_a_o, mask_e_a_ac, exploration_noise=True)
+            )
             # Step in envs
             obs_next_e, rew_e_a, termination_e, truncation_e, info_e = train_env.step(
                 act_e_a
             )
-            obs_next_e_a_o: np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]] = np.stack(
-                [obs.obs for obs in obs_next_e]
-            )
+            obs_next_e_a_o: np.ndarray[
+                tuple[typing.Any, ...], np.dtype[np.floating]
+            ] = np.stack([obs.obs for obs in obs_next_e])
             # Add transitions to memories of all learning agents, only shared memory now
             agent.save_to_memory(
                 obs_e_a_o,
@@ -325,25 +322,27 @@ class DecentralizedTrainer:
         num_collected_episodes = 0
         num_envs: int = test_env.env_num
         # Array of size number episodes that stores reward in that episode
-        rewards_p_a: list[npt.NDArray[np.float32]] = []
-        rewards_e_a: np.ndarray[tuple[int, int], np.dtype[np.floating]] = (
-            np.zeros((num_envs, n_agents), dtype=np.float32)
+        rewards_p_a: list[
+            np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]]
+        ] = []
+        rewards_e_a: np.ndarray[tuple[int, int], np.dtype[np.floating]] = np.zeros(
+            (num_envs, n_agents), dtype=np.float64
         )
         obs_e, _ = test_env.reset()
         while num_collected_episodes < self.n_testing_episodes:
             if self.test_fn:
                 self.test_fn(num_collected_episodes, num_collected_steps)
             # Get observations from envs
-            obs_e_a_o: np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]] = np.stack(
-                [obs.obs for obs in obs_e]
+            obs_e_a_o: np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]] = (
+                np.stack([obs.obs for obs in obs_e])
             )
-            mask_e_a_ac: np.ndarray[tuple[typing.Any, ...], np.dtype[np.unsignedinteger]] = np.stack(
-                [obs.mask for obs in obs_e]
-            )
+            mask_e_a_ac: np.ndarray[
+                tuple[typing.Any, ...], np.dtype[np.unsignedinteger]
+            ] = np.stack([obs.mask for obs in obs_e])
             # Forward observations to agent
-            act_e_a: np.ndarray[
-                tuple[typing.Any, ...], np.dtype[np.integer]
-            ] = agent.get_act_batch(obs_e_a_o, mask_e_a_ac, exploration_noise=False)
+            act_e_a: np.ndarray[tuple[typing.Any, ...], np.dtype[np.integer]] = (
+                agent.get_act_batch(obs_e_a_o, mask_e_a_ac, exploration_noise=False)
+            )
             # Step in envs
             obs_next_e, rew_e_a, termination_e, truncation_e, _ = test_env.step(act_e_a)
             num_collected_steps += num_envs

@@ -17,8 +17,8 @@ import warehouse_rl.warehouse
 
 n_agents = 3
 net = tianshou.utils.net.common.Net(
-    state_shape=36 + 3,
-    action_shape=4,
+    state_shape=7 + 36,
+    action_shape=5,
     hidden_sizes=[1024, 1024, 512, 512, 256, 256, 128, 128, 64, 64],
     norm_layer=torch.nn.LayerNorm,
     activation=torch.nn.ReLU,
@@ -30,7 +30,7 @@ net = tianshou.utils.net.common.Net(
 policy: tianshou.algorithm.modelfree.dqn.DiscreteQLearningPolicy[
     tianshou.utils.net.common.Net
 ] = tianshou.algorithm.modelfree.dqn.DiscreteQLearningPolicy(
-    model=net, action_space=gymnasium.spaces.Discrete(4), eps_training=1.0
+    model=net, action_space=gymnasium.spaces.Discrete(5), eps_training=1.0
 )
 algorithm: tianshou.algorithm.modelfree.dqn.DQN[
     tianshou.algorithm.modelfree.dqn.DiscreteQLearningPolicy[
@@ -40,8 +40,8 @@ algorithm: tianshou.algorithm.modelfree.dqn.DQN[
     policy=policy,
     optim=tianshou.algorithm.optim.AdamOptimizerFactory(lr=0.0001),
     gamma=0.99,
-    n_step_return_horizon=20,
-    target_update_freq=400,
+    n_step_return_horizon=30,
+    target_update_freq=500,
     is_double=True,
 )
 memory = tianshou.data.buffer.vecbuf.PrioritizedVectorReplayBuffer(
@@ -115,5 +115,5 @@ trainer = warehouse_rl.agents.DecentralizedTrainer(
     save_last_fn=save_last_fn,
     save_best_fn=save_best_fn,
 )
-
+algorithm.to("cuda")
 trainer.train(train_env, test_env, agent, n_agents, True)

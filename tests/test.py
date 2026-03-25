@@ -12,9 +12,9 @@ import warehouse_rl.warehouse_b
 
 n_agents = 3
 net = tianshou.utils.net.common.Net(
-    state_shape=36 + 3,
-    action_shape=4,
-    hidden_sizes=[1024, 1024, 512, 512, 256, 256, 128, 128, 64, 64],
+    state_shape=7 + 36,
+    action_shape=5,
+    hidden_sizes=[1024, 1024, 512, 512, 256, 256, 128, 128, 128, 64, 64, 64],
     norm_layer=torch.nn.LayerNorm,
     activation=torch.nn.ReLU,
     dueling_param=(
@@ -26,13 +26,13 @@ policy: tianshou.algorithm.modelfree.dqn.DiscreteQLearningPolicy[
     tianshou.utils.net.common.Net
 ] = tianshou.algorithm.modelfree.dqn.DiscreteQLearningPolicy(
     model=net,
-    action_space=gymnasium.spaces.Discrete(4),
+    action_space=gymnasium.spaces.Discrete(5),
     eps_inference=1.0,
     eps_training=1.0,
 )
 policy.load_state_dict(
     torch.load(
-        os.path.join(os.getcwd(), "ckpt/b", "best.pth"),
+        os.path.join(os.getcwd(), "ckpt/b", "last.pth"),
         weights_only=True,
     )
 )

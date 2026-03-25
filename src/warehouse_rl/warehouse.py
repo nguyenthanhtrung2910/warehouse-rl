@@ -83,7 +83,7 @@ class Warehouse(
             self.shuttles.append(
                 warehouse_rl.sprites.Loader(ray_node, self.map.map_size)
             )
-        self.action_space = gymnasium.spaces.MultiDiscrete(np.full(n_shuttles, 4))
+        self.action_space = gymnasium.spaces.MultiDiscrete(np.full(n_shuttles, 5))
         self.obs_mode = observation_mode
         match render_mode:
             case warehouse_rl.enums.RenderMode.Null:
@@ -161,8 +161,8 @@ class Warehouse(
             result: warehouse_rl.sprites.StepResult = shuttle.step(
                 warehouse_rl.enums.Action(action[i])
             )
+            reward_a[i] += result.reward
             if result.movements:
-                reward_a[i] = result.reward
                 shuttle_movements.extend(result.movements)
         self.__simulate_movement(shuttle_movements)
         # TODO: If we want parcel movement is parallel with shuttle movement,
@@ -172,13 +172,13 @@ class Warehouse(
         parcel_movements: list[Movement] = []
         for i, shuttle in enumerate(self.shuttles):
             result: warehouse_rl.sprites.StepResult = shuttle.pick_up()
+            reward_a[i] += result.reward
             if result.movements:
-                reward_a[i] = result.reward
                 parcel_movements.extend(result.movements)
             result: warehouse_rl.sprites.StepResult = shuttle.drop_off()
+            reward_a[i] += result.reward
             if result.movements:
                 self.parcel_counter += 1
-                reward_a[i] = result.reward
                 parcel_movements.extend(result.movements)
         self.__simulate_movement(parcel_movements)
 
