@@ -30,146 +30,21 @@ TNet = typing.TypeVar("TNet", bound=torch.nn.Module)
 class OffPolicyAgent:
     def __init__(
         self,
-        loader_algorithm: tianshou.algorithm.modelfree.dqn.DQN[
-            tianshou.algorithm.modelfree.dqn.DiscreteQLearningPolicy[TNet]
-        ],
-        picker_algorithm: tianshou.algorithm.modelfree.dqn.DQN[
-            tianshou.algorithm.modelfree.dqn.DiscreteQLearningPolicy[TNet]
-        ],
-        loader_memory: tianshou.data.buffer.vecbuf.PrioritizedVectorReplayBuffer
-        | None = None,
-        picker_memory: tianshou.data.buffer.vecbuf.PrioritizedVectorReplayBuffer
-        | None = None,
-        gradient_steps_per_env_step: float = 1.0,
-    ) -> None:
-        self.loader_algorithm = loader_algorithm
-        self.loader_memory: tianshou.data.PrioritizedVectorReplayBuffer | None = (
-            loader_memory
-        )
-        self.picker_algorithm = picker_algorithm
-        self.picker_memory: tianshou.data.PrioritizedVectorReplayBuffer | None = (
-            picker_memory
-        )
-        self.gradient_steps_per_env_step: float = gradient_steps_per_env_step
-        # Policy should be always in eval mode to inference action
-        # Training mode is turned on only within context manager
-        self.loader_algorithm.policy.eval()
-        self.picker_algorithm.policy.eval()
-
-    def policy_update_fn(
-        self,
-        batch_size: int,
-        num_collected_steps: int,
-        update_loader: bool = True,
-    ):
-        num_gradient_steps = 0
-        if update_loader:
-            num_gradient_steps += self.__policy_update_fn(
-                self.loader_algorithm,
-                self.loader_memory,
-                batch_size,
-                num_collected_steps,
-            )
-        num_gradient_steps += self.__policy_update_fn(
-            self.picker_algorithm, self.picker_memory, batch_size, num_collected_steps
-        )
-        return num_gradient_steps
-
-    def get_act_batch(
-        self,
-        loader_obs_e_a_o: np.ndarray[tuple[int, int, int], np.dtype[np.floating]],
-        loader_mask_e_a_ac: np.ndarray[
-            tuple[int, int, int], np.dtype[np.unsignedinteger]
-        ],
-        picker_obs_e_a_o: np.ndarray[tuple[int, int, int], np.dtype[np.floating]],
-        picker_mask_e_a_ac: np.ndarray[
-            tuple[int, int, int], np.dtype[np.unsignedinteger]
-        ],
-        exploration_noise: bool,
-    ):
-        loader_act_e_a = self.__get_act_batch(
-            self.loader_algorithm,
-            loader_obs_e_a_o,
-            loader_mask_e_a_ac,
-            exploration_noise,
-        )
-        picker_act_e_a = self.__get_act_batch(
-            self.picker_algorithm,
-            picker_obs_e_a_o,
-            picker_mask_e_a_ac,
-            exploration_noise,
-        )
-        return loader_act_e_a, picker_act_e_a
-
-    def save_to_memory(
-        self,
-        # For loader
-        loader_obs_e_a_o: np.ndarray[tuple[int, int, int], np.dtype[np.floating]],
-        loader_obs_next_e_a_o: np.ndarray[tuple[int, int, int], np.dtype[np.floating]],
-        loader_act_e_a: np.ndarray[tuple[int, int], np.dtype[np.signedinteger]],
-        loader_rew_e_a: np.ndarray[tuple[int, int], np.dtype[np.floating]],
-        # For picker
-        picker_obs_e_a_o: np.ndarray[tuple[int, int, int], np.dtype[np.floating]],
-        picker_obs_next_e_a_o: np.ndarray[tuple[int, int, int], np.dtype[np.floating]],
-        picker_act_e_a: np.ndarray[tuple[int, int], np.dtype[np.signedinteger]],
-        picker_rew_e_a: np.ndarray[tuple[int, int], np.dtype[np.floating]],
-        info_e: np.ndarray[tuple[int], np.dtype[np.object_]],
-        termination_e: np.ndarray[tuple[int], np.dtype[np.bool]],
-        truncation_e: np.ndarray[tuple[int], np.dtype[np.bool]],
-        save_for_loader: bool = True,
-    ):
-        if save_for_loader:
-            self.__save_to_memory(
-                self.loader_memory,
-                loader_obs_e_a_o,
-                info_e,
-                loader_obs_next_e_a_o,
-                loader_act_e_a,
-                loader_rew_e_a,
-                termination_e,
-                truncation_e,
-            )
-        self.__save_to_memory(
-            self.picker_memory,
-            picker_obs_e_a_o,
-            info_e,
-            picker_obs_next_e_a_o,
-            picker_act_e_a,
-            picker_rew_e_a,
-            termination_e,
-            truncation_e,
-        )
-
-    @staticmethod
-    def get_act(
-        loader_policy: tianshou.algorithm.modelfree.dqn.DiscreteQLearningPolicy[TNet],
-        picker_policy: tianshou.algorithm.modelfree.dqn.DiscreteQLearningPolicy[TNet],
-        loader_obs_a_o: np.ndarray[tuple[int, int], np.dtype[np.floating]],
-        loader_mask_a_ac: np.ndarray[tuple[int, int], np.dtype[np.unsignedinteger]],
-        picker_obs_a_o: np.ndarray[tuple[int, int], np.dtype[np.floating]],
-        picker_mask_a_ac: np.ndarray[tuple[int, int], np.dtype[np.unsignedinteger]],
-        exploration_noise: bool,
-    ):
-        loader_act_a = OffPolicyAgent._get_act(
-            loader_policy,
-            loader_obs_a_o,
-            loader_mask_a_ac,
-            exploration_noise,
-        )
-        picker_act_a = OffPolicyAgent._get_act(
-            picker_policy,
-            picker_obs_a_o,
-            picker_mask_a_ac,
-            exploration_noise,
-        )
-        return np.hstack((loader_act_a, picker_act_a))
-
-    def __policy_update_fn(
-        self,
         algorithm: tianshou.algorithm.modelfree.dqn.DQN[
             tianshou.algorithm.modelfree.dqn.DiscreteQLearningPolicy[TNet]
         ],
-        memory: tianshou.data.buffer.vecbuf.PrioritizedVectorReplayBuffer | None,
+        memory: tianshou.data.buffer.vecbuf.PrioritizedVectorReplayBuffer | None = None,
+        gradient_steps_per_env_step: float = 1.0,
+    ) -> None:
+        self.algorithm = algorithm
+        self.memory: tianshou.data.PrioritizedVectorReplayBuffer | None = memory
+        self.gradient_steps_per_env_step: float = gradient_steps_per_env_step
+        # Policy should be always in eval mode to inference action
+        # Training mode is turned on only within context manager
+        self.algorithm.policy.eval()
+
+    def policy_update_fn(
+        self,
         batch_size: int,
         num_collected_steps: int,
     ) -> int:
@@ -181,24 +56,20 @@ class OffPolicyAgent:
                 f"n_gradient_steps is 0, n_collected_steps={num_collected_steps}, "
                 f"update_per_step={self.gradient_steps_per_env_step}",
             )
-        if memory is not None:
-            if len(memory) > batch_size:
-                with tianshou.utils.torch_utils.torch_train_mode(
-                    algorithm.policy
-                ) and tianshou.utils.torch_utils.policy_within_training_step(
-                    algorithm.policy
-                ):
-                    for _ in range(num_gradient_steps):
-                        algorithm.update(buffer=memory, sample_size=batch_size)
+        if self.memory is not None and len(self.memory) > batch_size:
+            with tianshou.utils.torch_utils.torch_train_mode(
+                self.algorithm.policy
+            ) and tianshou.utils.torch_utils.policy_within_training_step(
+                self.algorithm.policy
+            ):
+                for _ in range(num_gradient_steps):
+                    self.algorithm.update(buffer=self.memory, sample_size=batch_size)
         else:
             warnings.warn("Agent has no memory, nothing is updated.")
         return num_gradient_steps
 
-    def __get_act_batch(
+    def get_act_batch(
         self,
-        algorithm: tianshou.algorithm.modelfree.dqn.DQN[
-            tianshou.algorithm.modelfree.dqn.DiscreteQLearningPolicy[TNet]
-        ],
         obs_e_a_o: np.ndarray[tuple[int, int, int], np.dtype[np.floating]],
         mask_e_a_ac: np.ndarray[tuple[int, int, int], np.dtype[np.unsignedinteger]],
         exploration_noise: bool,
@@ -218,13 +89,13 @@ class OffPolicyAgent:
             ),
         )
         with torch.no_grad():
-            act_b = algorithm.policy(obs_batch).act
+            act_b = self.algorithm.policy(obs_batch).act
         if exploration_noise:
-            act_b = algorithm.policy.add_exploration_noise(act_b, obs_batch)
+            act_b = self.algorithm.policy.add_exploration_noise(act_b, obs_batch)
         return act_b.reshape(e, a)
 
     @staticmethod
-    def _get_act(
+    def get_act(
         policy: tianshou.algorithm.modelfree.dqn.DiscreteQLearningPolicy[TNet],
         obs_a_o: np.ndarray[tuple[int, int], np.dtype[np.floating]],
         mask_a_ac: np.ndarray[tuple[int, int], np.dtype[np.unsignedinteger]],
@@ -242,9 +113,8 @@ class OffPolicyAgent:
             act_a = policy.add_exploration_noise(act_a, obs_batch)
         return act_a
 
-    def __save_to_memory(
+    def save_to_memory(
         self,
-        memory: tianshou.data.buffer.vecbuf.PrioritizedVectorReplayBuffer | None,
         obs_e_a_o: np.ndarray[tuple[int, int, int], np.dtype[np.floating]],
         info_e: np.ndarray[tuple[int], np.dtype[np.object_]],
         obs_next_e_a_o: np.ndarray[tuple[int, int, int], np.dtype[np.floating]],
@@ -253,7 +123,7 @@ class OffPolicyAgent:
         termination_e: np.ndarray[tuple[int], np.dtype[np.bool]],
         truncation_e: np.ndarray[tuple[int], np.dtype[np.bool]],
     ) -> None:
-        if memory is not None:
+        if self.memory is not None:
             e = obs_e_a_o.shape[0]
             a = obs_e_a_o.shape[1]
             obs_b_o: np.ndarray[tuple[int, int], np.dtype[np.floating]] = (
@@ -275,21 +145,19 @@ class OffPolicyAgent:
             truncation_b: np.ndarray[tuple[int], np.dtype[np.bool]] = np.repeat(
                 truncation_e, a
             )
-            idx = np.where(np.any(obs_b_o != 0, axis=1))[0]
-            if idx.size != 0:
-                rollout: tianshou.data.types.RolloutBatchProtocol = typing.cast(
-                    tianshou.data.types.RolloutBatchProtocol,
-                    tianshou.data.Batch(
-                        obs=obs_b_o[idx],
-                        info=info_b[idx],
-                        obs_next=obs_next_b_o[idx],
-                        act=act_b[idx],
-                        rew=rew_b[idx],
-                        terminated=termination_b[idx],
-                        truncated=truncation_b[idx],
-                    ),
-                )
-                memory.add(rollout, buffer_ids=idx)
+            rollout: tianshou.data.types.RolloutBatchProtocol = typing.cast(
+                tianshou.data.types.RolloutBatchProtocol,
+                tianshou.data.Batch(
+                    obs=obs_b_o,
+                    info=info_b,
+                    obs_next=obs_next_b_o,
+                    act=act_b,
+                    rew=rew_b,
+                    terminated=termination_b,
+                    truncated=truncation_b,
+                ),
+            )
+            self.memory.add(rollout)
         else:
             warnings.warn("Agent has no memory, nothing is updated.")
 
@@ -329,17 +197,12 @@ class DecentralizedTrainer:
         train_env: tianshou.env.DummyVectorEnv,
         test_env: tianshou.env.DummyVectorEnv,
         agent: OffPolicyAgent,
-        n_loaders: int,
-        n_pickers: int,
+        n_shuttles: int,
         plot: bool = False,
     ) -> dict[str, typing.Any]:
-        assert agent.loader_memory is not None and agent.picker_memory is not None, (
-            "Learning agent must having a memory."
-        )
-        assert train_env.env_num * n_loaders == agent.loader_memory.buffer_num
-        assert train_env.env_num * n_pickers == agent.picker_memory.buffer_num
+        assert agent.memory is not None, "Learning agent must having a memory."
+        assert train_env.env_num * n_shuttles == agent.memory.buffer_num
         n_envs: int = train_env.env_num
-        n_training_episodes_for_loader = int(self.n_training_episodes / 2)
         n_collected_steps = 0
         n_collected_episodes = 0
         n_gradient_steps = 0
@@ -354,65 +217,41 @@ class DecentralizedTrainer:
             if self.train_fn:
                 self.train_fn(n_collected_episodes, n_collected_steps)
             # Get observations from envs
-            loader_obs_e_a_o: np.ndarray[
-                tuple[int, int, int], np.dtype[np.floating]
-            ] = np.stack([obs.loader_obs_a_o for obs in obs_e])
-            loader_mask_e_a_ac: np.ndarray[
+            obs_e_a_o: np.ndarray[tuple[int, int, int], np.dtype[np.floating]] = (
+                np.stack([obs.obs_a_o for obs in obs_e])
+            )
+            mask_e_a_ac: np.ndarray[
                 tuple[int, int, int], np.dtype[np.unsignedinteger]
-            ] = np.stack([obs.loader_mask_a_ac for obs in obs_e])
-            picker_obs_e_a_o: np.ndarray[
-                tuple[int, int, int], np.dtype[np.floating]
-            ] = np.stack([obs.picker_obs_a_o for obs in obs_e])
-            picker_mask_e_a_ac: np.ndarray[
-                tuple[int, int, int], np.dtype[np.unsignedinteger]
-            ] = np.stack([obs.picker_mask_a_ac for obs in obs_e])
+            ] = np.stack([obs.mask_a_ac for obs in obs_e])
             # Forward observations to agent
-            loader_act_e_a, picker_act_e_a = agent.get_act_batch(
-                loader_obs_e_a_o,
-                loader_mask_e_a_ac,
-                picker_obs_e_a_o,
-                picker_mask_e_a_ac,
+            act_e_a = agent.get_act_batch(
+                obs_e_a_o,
+                mask_e_a_ac,
                 exploration_noise=True,
             )
             # Step in envs
             obs_next_e, rew_e_a, termination_e, truncation_e, info_e = train_env.step(
-                np.hstack((loader_act_e_a, picker_act_e_a))
+                act_e_a
             )
-            loader_obs_next_e_a_o: np.ndarray[
-                tuple[int, int, int], np.dtype[np.floating]
-            ] = np.stack([obs.loader_obs_a_o for obs in obs_next_e])
-            picker_obs_next_e_a_o: np.ndarray[
-                tuple[int, int, int], np.dtype[np.floating]
-            ] = np.stack([obs.picker_obs_a_o for obs in obs_next_e])
+            obs_next_e_a_o: np.ndarray[tuple[int, int, int], np.dtype[np.floating]] = (
+                np.stack([obs.obs_a_o for obs in obs_next_e])
+            )
             # Add transitions to memories of all learning agents, only shared memory now
-            save_for_loader = (
-                True if n_collected_episodes < n_training_episodes_for_loader else False
-            )
             agent.save_to_memory(
-                loader_obs_e_a_o,
-                loader_obs_next_e_a_o,
-                loader_act_e_a,
-                rew_e_a[:, :n_loaders],
-                picker_obs_e_a_o,
-                picker_obs_next_e_a_o,
-                picker_act_e_a,
-                rew_e_a[:, n_loaders:],
+                obs_e_a_o,
                 info_e,
+                obs_next_e_a_o,
+                act_e_a,
+                rew_e_a,
                 termination_e,
                 truncation_e,
-                save_for_loader,
             )
             n_collected_steps += n_envs
             # Policy updating
             if (n_collected_steps - last_n_collected_steps) >= self.update_freq:
                 num_bonus_steps: int = n_collected_steps - last_n_collected_steps
-                update_loader = (
-                    True
-                    if n_collected_episodes < n_training_episodes_for_loader
-                    else False
-                )
                 n_gradient_steps += agent.policy_update_fn(
-                    self.batch_size, num_bonus_steps, update_loader
+                    self.batch_size, num_bonus_steps
                 )
                 last_n_collected_steps: int = n_collected_steps
             # Prepare new observation for next iteration
@@ -426,21 +265,17 @@ class DecentralizedTrainer:
             # Test
             if (n_collected_episodes - last_n_collected_episodes) >= self.test_freq:
                 test_stats: dict[str, typing.Any] = self.test(
-                    test_env, n_loaders, n_pickers, agent
+                    test_env, n_shuttles, agent
                 )
-                reward_metric, reward_loader, reward_picker = (
-                    test_stats["reward"],
-                    test_stats["reward_loader"],
-                    test_stats["reward_picker"],
-                )
+                reward_metric = test_stats["reward"]
                 if reward_metric > max(rewards) and self.save_best_fn:
                     self.save_best_fn(n_collected_episodes)
                     print("New better found")
                 episodes.append(n_collected_episodes)
                 rewards.append(reward_metric)
                 print(
-                    "===episode {:04d} done with reward loader: {:+06.2f} reward picker {:+06.2f}===".format(
-                        n_collected_episodes, reward_loader, reward_picker
+                    "===episode {:04d} done with reward: {:+06.2f}===".format(
+                        n_collected_episodes, reward_metric
                     )
                 )
                 last_n_collected_episodes: int = n_collected_episodes
@@ -483,8 +318,7 @@ class DecentralizedTrainer:
     def test(
         self,
         test_env: tianshou.env.DummyVectorEnv,
-        n_loaders: int,
-        n_pickers: int,
+        n_shuttles: int,
         agent: OffPolicyAgent,
     ) -> dict[str, typing.Any]:
         num_collected_steps = 0
@@ -493,37 +327,27 @@ class DecentralizedTrainer:
         # Array of size number episodes that stores reward in that episode
         rewards_p_a: list[np.ndarray[tuple[int, int], np.dtype[np.floating]]] = []
         rewards_e_a: np.ndarray[tuple[int, int], np.dtype[np.floating]] = np.zeros(
-            (num_envs, n_loaders + n_pickers), dtype=np.float64
+            (num_envs, n_shuttles), dtype=np.float64
         )
         obs_e, _ = test_env.reset()
         while num_collected_episodes < self.n_testing_episodes:
             if self.test_fn:
                 self.test_fn(num_collected_episodes, num_collected_steps)
             # Get observations from envs
-            loader_obs_e_a_o: np.ndarray[
-                tuple[typing.Any, ...], np.dtype[np.floating]
-            ] = np.stack([obs.loader_obs_a_o for obs in obs_e])
-            loader_mask_e_a_ac: np.ndarray[
+            obs_e_a_o: np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]] = (
+                np.stack([obs.obs_a_o for obs in obs_e])
+            )
+            mask_e_a_ac: np.ndarray[
                 tuple[typing.Any, ...], np.dtype[np.unsignedinteger]
-            ] = np.stack([obs.loader_mask_a_ac for obs in obs_e])
-            picker_obs_e_a_o: np.ndarray[
-                tuple[int, int, int], np.dtype[np.floating]
-            ] = np.stack([obs.picker_obs_a_o for obs in obs_e])
-            picker_mask_e_a_ac: np.ndarray[
-                tuple[int, int, int], np.dtype[np.unsignedinteger]
-            ] = np.stack([obs.picker_mask_a_ac for obs in obs_e])
+            ] = np.stack([obs.mask_a_ac for obs in obs_e])
             # Forward observations to agent
-            loader_act_e_a, picker_act_e_a = agent.get_act_batch(
-                loader_obs_e_a_o,
-                loader_mask_e_a_ac,
-                picker_obs_e_a_o,
-                picker_mask_e_a_ac,
+            act_e_a = agent.get_act_batch(
+                obs_e_a_o,
+                mask_e_a_ac,
                 exploration_noise=True,
             )
             # Step in envs
-            obs_next_e, rew_e_a, termination_e, truncation_e, _ = test_env.step(
-                np.hstack((loader_act_e_a, picker_act_e_a))
-            )
+            obs_next_e, rew_e_a, termination_e, truncation_e, _ = test_env.step(act_e_a)
             num_collected_steps += num_envs
             rewards_e_a += rew_e_a
             # Prepare new observation for next iteration
@@ -542,16 +366,10 @@ class DecentralizedTrainer:
         )
         if self.reward_metric:
             reward = self.reward_metric(reward_p_a)
-            reward_loader: float = self.reward_metric(reward_p_a[:, :n_loaders])
-            reward_picker: float = self.reward_metric(reward_p_a[:, n_loaders:])
         else:
             reward = reward_p_a.mean()
-            reward_loader = reward_p_a[:, :n_loaders].mean()
-            reward_picker = reward_p_a[:, n_loaders:].mean()
         return {
             "reward": reward,
-            "reward_loader": reward_loader,
-            "reward_picker": reward_picker,
             "mean_num_steps": num_collected_steps / num_collected_episodes,
             "num_collected_steps": num_collected_steps,
             "num_collected_episodes": num_collected_episodes,

@@ -21,8 +21,10 @@ SPEED = 250
 
 @dataclasses.dataclass
 class Observation:
-    obs: np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]]
-    mask: np.ndarray[tuple[typing.Any, ...], np.dtype[np.unsignedinteger]]
+    loader_obs_a_o: np.ndarray[tuple[int, int], np.dtype[np.floating]]
+    loader_mask_a_ac: np.ndarray[tuple[int, int], np.dtype[np.unsignedinteger]]
+    picker_obs_a_o: np.ndarray[tuple[int, int], np.dtype[np.floating]]
+    picker_mask_a_ac: np.ndarray[tuple[int, int], np.dtype[np.unsignedinteger]]
 
 
 @dataclasses.dataclass
@@ -34,16 +36,18 @@ class Movement:
 
 
 class Warehouse(
-    gymnasium.core.Env[
-        Observation, np.ndarray[tuple[typing.Any, ...], np.dtype[np.integer]]
-    ]
+    gymnasium.core.Env[Observation, np.ndarray[tuple[int], np.dtype[np.integer]]]
 ):
     step_counter: int
     parcel_counter: int
+    norequested_step_counter: int
     n_steps: int
-    n_shuttles: int
+    n_loaders: int
+    n_pickers: int
     map: warehouse_rl.map.WarehouseMap
-    shuttles: list[warehouse_rl.sprites.Shuttle]
+    in_line_parcels: list[warehouse_rl.sprites.Parcel]
+    loaders: list[warehouse_rl.sprites.Loader]
+    pickers: list[warehouse_rl.sprites.Picker]
     obs_mode: warehouse_rl.enums.ObsMode
     screen: pygame.Surface | None
     clock: pygame.time.Clock | None
@@ -64,7 +68,9 @@ class Warehouse(
         n_lines: int,
         is_double_line: bool,
         n_steps: int,
-        n_shuttles: int,
+        n_loaders: int,
+        n_pickers: int,
+        request_freq: int = 18,
         render_mode: warehouse_rl.enums.RenderMode = warehouse_rl.enums.RenderMode.Null,
         observation_mode: warehouse_rl.enums.ObsMode = warehouse_rl.enums.ObsMode.Flatten,
         recording: bool = False,
@@ -72,18 +78,23 @@ class Warehouse(
         super().__init__()
         self.step_counter = 0
         self.parcel_counter = 0
-        self.n_steps = n_steps
-        self.n_shuttles = n_shuttles
+        self.norequested_step_counter = 0
+        self.n_steps = n_steps  # const
+        self.n_loaders = n_loaders  # const
+        self.n_pickers = n_pickers  # const
         n_rays: int = 2 if is_double_line else 1
         self.map = warehouse_rl.map.WarehouseMap(
             n_rows, n_columns, n_subrows, n_lines, n_rays
         )
-        self.shuttles = []
-        for ray_node in random.sample(list(self.map.ray_nodes.values()), n_shuttles):
-            self.shuttles.append(
+        self.in_line_parcels = []
+        self.loaders = []
+        for ray_node in random.sample(list(self.map.ray_nodes.values()), n_loaders):
+            self.loaders.append(
                 warehouse_rl.sprites.Loader(ray_node, self.map.map_size)
             )
-        self.action_space = gymnasium.spaces.MultiDiscrete(np.full(n_shuttles, 5))
+        self.pickers = []
+        self.request_freq = request_freq
+        self.action_space = gymnasium.spaces.MultiDiscrete(np.full(n_loaders, 4))
         self.obs_mode = observation_mode
         match render_mode:
             case warehouse_rl.enums.RenderMode.Null:
@@ -107,7 +118,7 @@ class Warehouse(
         if self.__recording:
             fourcc = int(cv2.VideoWriter_fourcc(*"mp4v"))  # type: ignore
             self.__writer = cv2.VideoWriter(
-                "warehouse.mp4", fourcc, 10, self.map.image.get_size()
+                "warehouse.mp4", fourcc, 15, self.map.image.get_size()
             )
         else:
             self.__writer = None
@@ -123,13 +134,20 @@ class Warehouse(
             random.seed(seed)
         self.step_counter = 0
         self.parcel_counter = 0
-        for shuttle, ray_node in zip(
-            self.shuttles,
-            random.sample(list(self.map.ray_nodes.values()), self.n_shuttles),
+        self.norequested_step_counter = 0
+        # Reset all loader
+        for loader, ray_node in zip(
+            self.loaders,
+            random.sample(list(self.map.ray_nodes.values()), self.n_loaders),
         ):
-            shuttle.reset(ray_node)
+            loader.reset(ray_node)
+        # Remove all pickers
+        for picker in self.pickers:
+            picker.pos.robot = None
+        self.pickers.clear()
         for line_node in self.map.line_nodes.values():
             line_node.parcel = None
+        self.in_line_parcels.clear()
         _ = warehouse_rl.sprites.Parcel(self.map.line_nodes[f"1.{-1}"])
         self.render()
         obs: Observation = self.__make_observation()
@@ -138,27 +156,27 @@ class Warehouse(
 
     @typing.override
     def step(
-        self, action: np.ndarray[tuple[typing.Any, ...], np.dtype[np.integer]]
+        self, action: np.ndarray[tuple[int], np.dtype[np.integer]]
     ) -> tuple[
         Observation,
-        np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]],
+        np.ndarray[tuple[int], np.dtype[np.floating]],
         bool,
         bool,
         dict[str, typing.Any],
     ]:
-        if (
-            self.parcel_counter == self.map.n_line_nodes
-            or self.step_counter == self.n_steps
-        ):
+        if self.step_counter == self.n_steps:
             raise ValueError(
                 "The environment has ended. You have to reset it before step it further."
             )
-        reward_a: list[float] = [0.0] * self.n_shuttles
-        # TODO: Moving shuttle by deterministic order is not close to parallelism.
-        # Should we make movement order random?
+        reward_a: list[float] = [0.0] * (self.n_loaders + self.n_pickers)
+        shuttles = self.loaders + self.pickers
+        indices: list[int] = list(range(len(shuttles)))
+        # Get a random order of shuttles
+        random.shuffle(indices)
+        # Perform shuttles moves
         shuttle_movements: list[Movement] = []
-        for i, shuttle in enumerate(self.shuttles):
-            result: warehouse_rl.sprites.StepResult = shuttle.step(
+        for i in indices:
+            result: warehouse_rl.sprites.StepResult = shuttles[i].step(
                 warehouse_rl.enums.Action(action[i])
             )
             reward_a[i] += result.reward
@@ -167,25 +185,42 @@ class Warehouse(
         self.__simulate_movement(shuttle_movements)
         # TODO: If we want parcel movement is parallel with shuttle movement,
         # we have to add new action. Pick or drop parcel right away after shuttle movement
-        # and simulate all is not right because the target which sprite move to cann't move
+        # and simulate all is not right because the target which sprite move to can't move
         # during its movement.
         parcel_movements: list[Movement] = []
-        for i, shuttle in enumerate(self.shuttles):
-            result: warehouse_rl.sprites.StepResult = shuttle.pick_up()
+        for i in indices:
+            warehouse_is_full = len(self.in_line_parcels) > self.map.n_line_nodes - len(
+                shuttles
+            )
+            result: warehouse_rl.sprites.StepResult = shuttles[i].pick_up(
+                warehouse_is_full
+            )
             reward_a[i] += result.reward
+            if result.parcel and result.parcel in self.in_line_parcels:
+                self.in_line_parcels.remove(result.parcel)
             if result.movements:
                 parcel_movements.extend(result.movements)
-            result: warehouse_rl.sprites.StepResult = shuttle.drop_off()
+            result: warehouse_rl.sprites.StepResult = shuttles[i].drop_off()
             reward_a[i] += result.reward
+            if result.parcel and not result.parcel.is_requested:
+                self.in_line_parcels.append(result.parcel)
             if result.movements:
-                self.parcel_counter += 1
                 parcel_movements.extend(result.movements)
         self.__simulate_movement(parcel_movements)
-
+        # Check if number of parcels in line is big enough
+        if len(self.pickers) == 0 and len(self.in_line_parcels) >= int(
+            3 * self.map.n_line_nodes / 4
+        ):
+            self.__init_pickers()
+        # Delete deliveried parcel and request a new one
+        if self.map.palletized_node.parcel:
+            self.parcel_counter += 1
+            self.map.palletized_node.parcel = None
+        self.__request_parcel()
         self.step_counter += 1
         obs: Observation = self.__make_observation()
-        termination: bool = self.parcel_counter == self.map.n_line_nodes
-        truncation: bool = self.step_counter == self.n_steps
+        termination: bool = self.step_counter == self.n_steps
+        truncation: bool = False
         info: dict[str, typing.Any] = {}
         return (
             obs,
@@ -194,6 +229,35 @@ class Warehouse(
             truncation,
             info,
         )
+
+    def __init_pickers(self):
+        free_ray_nodes: list[warehouse_rl.map.RayNode] = [
+            ray_node
+            for ray_node in self.map.ray_nodes.values()
+            if ray_node.robot is None
+        ]
+        for ray_node in random.sample(free_ray_nodes, self.n_pickers):
+            self.pickers.append(
+                warehouse_rl.sprites.Picker(ray_node, self.map.map_size)
+            )
+
+    def __request_parcel(self):
+        requested_parcels = [
+            parcel for parcel in self.in_line_parcels if parcel.is_requested
+        ]
+        if (
+            self.norequested_step_counter >= self.request_freq
+            and len(requested_parcels) < 10
+        ):
+            unrequested_parcels = [
+                parcel for parcel in self.in_line_parcels if not parcel.is_requested
+            ]
+            if unrequested_parcels:
+                parcel = unrequested_parcels[random.randrange(len(unrequested_parcels))]
+                parcel.is_requested = True
+            self.norequested_step_counter = 0
+            return
+        self.norequested_step_counter += 1
 
     @typing.override
     def render(self) -> None:
@@ -210,6 +274,7 @@ class Warehouse(
     def __make_observation(self) -> Observation:
         match self.obs_mode:
             case warehouse_rl.enums.ObsMode.Flatten:
+                # obs <==> obs_a_o
                 line_nodes_states: list[float] = []
                 for line_node in self.map.line_nodes.values():
                     if not line_node.is_depalletized and not line_node.is_palletized:
@@ -217,28 +282,56 @@ class Warehouse(
                             line_nodes_states.append(1.0)
                         else:
                             line_nodes_states.append(0.0)
-                # obs <==> obs_a_o
-                # TODO: Should we add at least state of arounding shuttles to each
-                # shuttle's observation? For centralized training?
-                obs: np.ndarray[tuple[typing.Any, ...], np.dtype[np.floating]] = (
+                loader_obs: np.ndarray[tuple[int, int], np.dtype[np.floating]] = (
                     np.vstack(
                         [
-                            np.hstack((shuttle.state, np.array(line_nodes_states)))
-                            for shuttle in self.shuttles
+                            np.hstack((loader.state, np.array(line_nodes_states)))
+                            for loader in self.loaders
                         ]
                     )
                 )
+                line_nodes_states: list[float] = []
+                for line_node in self.map.line_nodes.values():
+                    if not line_node.is_depalletized and not line_node.is_palletized:
+                        if line_node.parcel:
+                            line_nodes_states.append(
+                                1.0 if line_node.parcel.is_requested else 0.5
+                            )
+                        else:
+                            line_nodes_states.append(0.0)
+                picker_obs: (
+                    np.ndarray[tuple[int, int], np.dtype[np.floating]] | None
+                ) = (
+                    (
+                        np.vstack(
+                            [
+                                np.hstack((picker.state, np.array(line_nodes_states)))
+                                for picker in self.pickers
+                            ]
+                        )
+                    )
+                    if self.pickers
+                    else np.zeros((self.n_pickers, len(line_nodes_states) + 7))
+                )
             case warehouse_rl.enums.ObsMode.ResizedWindow:
                 # TODO: obs <==> obs_a_c_h_w
-                obs = self.__create_obs_img()
+                loader_obs = self.__create_obs_img()
+                picker_obs = loader_obs
             case _:
                 raise ValueError(
                     f"Invalid render_mode value: {self.__observation_mode}."
                 )
-        mask_a_ac: np.ndarray[tuple[typing.Any, ...], np.dtype[np.unsignedinteger]] = (
-            np.vstack([shuttle.mask for shuttle in self.shuttles])
+        loader_mask_a_ac: np.ndarray[tuple[int, int], np.dtype[np.unsignedinteger]] = (
+            np.vstack([loader.mask for loader in self.loaders])
         )
-        return Observation(obs, mask_a_ac)
+        picker_mask_a_ac: (
+            np.ndarray[tuple[int, int], np.dtype[np.unsignedinteger]] | None
+        ) = (
+            (np.vstack([picker.mask for picker in self.pickers]))
+            if self.pickers
+            else np.zeros((self.n_pickers, 4), dtype=np.uint8)
+        )
+        return Observation(loader_obs, loader_mask_a_ac, picker_obs, picker_mask_a_ac)
 
     def __simulate_movement(self, movements: list[Movement]) -> None:
         # Simulate if rendering to screen or recording
@@ -320,8 +413,10 @@ class Warehouse(
 
     def __render_to_surface(self, surface: pygame.Surface) -> None:
         surface.blit(self.map.image, (0, 0))
-        for shuttle in self.shuttles:
-            shuttle.draw(surface)
+        for loader in self.loaders:
+            loader.draw(surface)
+        for picker in self.pickers:
+            picker.draw(surface)
         for line_node in self.map.line_nodes.values():
             if line_node.parcel:
                 line_node.parcel.draw(surface)
@@ -335,8 +430,9 @@ if __name__ == "__main__":
         3,
         3,
         True,
-        n_steps=200,
-        n_shuttles=3,
+        300,
+        2,
+        2,
         render_mode=warehouse_rl.enums.RenderMode.Human,
         recording=False,
     )
@@ -350,18 +446,25 @@ if __name__ == "__main__":
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_r:
                     env.reset()
-        mask_a_ac = obs.mask
+        loader_mask_a_ac = obs.loader_mask_a_ac
+        picker_mask_a_ac = obs.picker_mask_a_ac
         action_a: list[int] = []
-        for mask_ac in mask_a_ac:
+        for mask_ac in loader_mask_a_ac:
             legal_action_ac: list[int] = [i for i, v in enumerate(mask_ac) if v]
             if len(legal_action_ac) != 0:
                 action_a.append(random.choice(legal_action_ac))
             else:
-                action_a.append(1)
+                action_a.append(0)
+        for mask_ac in picker_mask_a_ac:
+            legal_action_ac: list[int] = [i for i, v in enumerate(mask_ac) if v]
+            if len(legal_action_ac) != 0:
+                action_a.append(random.choice(legal_action_ac))
+            else:
+                action_a.append(0)
         next_obs, reward_a, termination, truncation, info = env.step(np.array(action_a))
-        # print(
-        #     f"In step {env.n_steps}: observation {obs.obs} action {action_a} reward {reward_a}"
-        # )
+        print(
+            f"In step {env.n_steps}: loader {obs.loader_obs_a_o}, picker {obs.picker_obs_a_o} action {action_a} reward {reward_a}"
+        )
         obs: Observation = next_obs
         done: bool = termination or truncation
     env.close()

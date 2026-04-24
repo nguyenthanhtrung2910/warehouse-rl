@@ -370,6 +370,27 @@ class WarehouseMap:
                 )
         return self.ray_nodes[f"0.{y}"], self.ray_nodes[f"{n_nodes - 1}.{y}"]
 
+    def __create_sparse_horizontal_ray( # pyright: ignore[reportUnusedFunction]
+        self, n_nodes: int, y: int, positive_direction: bool, offset: int
+    ) -> tuple[RayNode, RayNode]:
+        if positive_direction:
+            for x in range(n_nodes - 1):
+                self.__create_ray_edge(
+                    RayNode((offset + 1) * x, y),
+                    RayNode((offset + 1) * (x + 1), y),
+                    warehouse_rl.enums.Direction.Right,
+                )
+        else:
+            for x in range(n_nodes - 1, 0, -1):
+                self.__create_ray_edge(
+                    RayNode((offset + 1) * x, y),
+                    RayNode((offset + 1) * (x - 1), y),
+                    warehouse_rl.enums.Direction.Left,
+                )
+        return self.ray_nodes[f"0.{y}"], self.ray_nodes[
+            f"{(offset + 1) * (n_nodes - 1)}.{y}"
+        ]
+
     def __draw(self) -> None:
         self.image.fill((255, 255, 255))
         for ray_node in self.ray_nodes.values():

@@ -28,12 +28,10 @@ class Action(enum.Enum):
     # TODO: Allow shuttle decide when to pick or drop itself. It allows us simulate parcel movement parallel with
     # shuttle movement.
     # But if we add more action, agent needs to learn more. How we can make the balance?
-    Null = 0
-    Up = 1
-    Down = 2
-    Left = 3
-    Right = 4
-
+    Up = 0
+    Down = 1
+    Left = 2
+    Right = 3
 
 NODE_SIZE = pygame.math.Vector2(80, 50)
 STATE_SIZE = (32, 32)

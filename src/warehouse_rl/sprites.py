@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import abc
 import dataclasses
-from itertools import islice
 import typing
 
 import numpy as np
@@ -19,6 +18,7 @@ import warehouse_rl.warehouse
 class StepResult:
     reward: float
     movements: list[warehouse_rl.warehouse.Movement] | None
+    parcel: Parcel | None
 
 
 class Sprite(abc.ABC):
@@ -110,7 +110,7 @@ class Shuttle(Sprite):
         self.rect.center = pos.world_pos  # pyright: ignore[reportAttributeAccessIssue]
 
     @abc.abstractmethod
-    def pick_up(self) -> StepResult:
+    def pick_up(self, warehouse_is_full: bool = False) -> StepResult:
         pass
 
     @abc.abstractmethod
@@ -161,10 +161,8 @@ class Shuttle(Sprite):
         is_action_legal = self._is_legal_move(action)
         if not is_action_legal:
             # If no action is legal, do nothing
-            return StepResult(0.0, None)
+            return StepResult(0.0, None, None)
         match action:
-            case warehouse_rl.enums.Action.Null:
-                return StepResult(self.DEFAULT_REWARD, None)
             case warehouse_rl.enums.Action.Up:
                 self.__move_up()
             case warehouse_rl.enums.Action.Down:
@@ -178,12 +176,11 @@ class Shuttle(Sprite):
         return StepResult(
             Shuttle.DEFAULT_REWARD,
             [warehouse_rl.warehouse.Movement(self, self.pos.world_pos)],
+            None,
         )
 
     def _is_legal_move(self, act: warehouse_rl.enums.Action):
         match act:
-            case warehouse_rl.enums.Action.Null:
-                return True
             case warehouse_rl.enums.Action.Up:
                 if not self.pos.up:
                     return False
@@ -247,20 +244,22 @@ class Loader(Shuttle):
         )
 
     @typing.override
-    def pick_up(self):
+    def pick_up(self, warehouse_is_full: bool = False):
         if (
             self.pos.from_line
             and self.pos.from_line.is_depalletized
             and self.pos.from_line.parcel
             and not self.parcel
         ):
-            self.parcel = self.pos.from_line.parcel
-            self.pos.from_line.parcel = Parcel(self.pos.from_line)
-            return StepResult(
-                Loader.PICKUP_REWARD,
-                [warehouse_rl.warehouse.Movement(self.parcel, self.world_pos)],
-            )
-        return StepResult(0.0, None)
+            if not warehouse_is_full:
+                self.parcel = self.pos.from_line.parcel
+                self.pos.from_line.parcel = Parcel(self.pos.from_line)
+                return StepResult(
+                    Loader.PICKUP_REWARD,
+                    [warehouse_rl.warehouse.Movement(self.parcel, self.world_pos)],
+                    self.parcel,
+                )
+        return StepResult(0.0, None, None)
 
     @typing.override
     def drop_off(self):
@@ -281,8 +280,9 @@ class Loader(Shuttle):
             return StepResult(
                 Loader.DROPOFF_REWARD,
                 [warehouse_rl.warehouse.Movement(current.parcel, current.world_pos)],
+                current.parcel,
             )
-        return StepResult(0.0, None)
+        return StepResult(0.0, None, None)
 
     @property
     @typing.override
@@ -294,7 +294,7 @@ class Loader(Shuttle):
             has_parcel,
         ]
         state.extend(
-            [float(self._is_legal_move(action)) for action in islice(warehouse_rl.enums.Action, 1 , None)]
+            [float(self._is_legal_move(action)) for action in warehouse_rl.enums.Action]
         )
         return np.array(state, dtype=np.float64)
 
@@ -319,13 +319,13 @@ class Picker(Shuttle):
         )
 
     @typing.override
-    def pick_up(self):
+    def pick_up(self, warehouse_is_full: bool = False):
         if (
             self.pos.from_line
             and not self.pos.from_line.is_depalletized
             and self.pos.from_line.parcel
             and not self.parcel
-            and self.__has_requested(self.pos.from_line)
+            and Picker.has_requested(self.pos.from_line)
         ):
             movements: list[warehouse_rl.warehouse.Movement] = []
             self.parcel = self.pos.from_line.parcel
@@ -343,10 +343,10 @@ class Picker(Shuttle):
                 )
                 current = current.previous_node
             if self.parcel.is_requested:
-                return StepResult(Picker.PICK_UP_REQ_REWARD, movements)
+                return StepResult(Picker.PICK_UP_REQ_REWARD, movements, self.parcel)
             else:
-                return StepResult(Picker.PICK_UP_REWARD, movements)
-        return StepResult(0.0, None)
+                return StepResult(Picker.PICK_UP_REWARD, movements, self.parcel)
+        return StepResult(0.0, None, None)
 
     @typing.override
     def drop_off(self):
@@ -362,6 +362,7 @@ class Picker(Shuttle):
                                 self.pos.to_line.parcel, self.pos.to_line.world_pos
                             )
                         ],
+                        self.pos.to_line.parcel,
                     )
             else:
                 if not self.parcel.is_requested:
@@ -380,8 +381,9 @@ class Picker(Shuttle):
                                 current.parcel, current.world_pos
                             )
                         ],
+                        current.parcel,
                     )
-        return StepResult(0.0, None)
+        return StepResult(0.0, None, None)
 
     @property
     @typing.override
@@ -396,11 +398,12 @@ class Picker(Shuttle):
             has_parcel,
         ]
         state.extend(
-            [float(self._is_legal_move(action)) for action in islice(warehouse_rl.enums.Action, 1 , None)]
+            [float(self._is_legal_move(action)) for action in warehouse_rl.enums.Action]
         )
         return np.array(state, dtype=np.float64)
 
-    def __has_requested(self, from_line: warehouse_rl.map.LineNode):
+    @staticmethod
+    def has_requested(from_line: warehouse_rl.map.LineNode):
         current = from_line
         while True:
             if current.parcel and current.parcel.is_requested:
@@ -409,3 +412,116 @@ class Picker(Shuttle):
                 break
             current = current.previous_node
         return False
+
+
+class Combined(Shuttle):
+    PICK_UP_REWARD = 1.0
+    PICK_UP_REQ_REWARD = 1.0
+    DROP_OFF_REWARD = 5.0
+    DROP_OFF_REQ_REWARD = 10.0
+
+    def __init__(
+        self,
+        pos: warehouse_rl.map.RayNode,
+        map_size: pygame.math.Vector2,
+    ):
+        super().__init__(pos, map_size)
+        pygame.draw.circle(
+            self.image,
+            (7, 191, 242),
+            warehouse_rl.enums.NODE_SIZE / 2,
+            min(warehouse_rl.enums.NODE_SIZE) / 2,
+        )
+
+    @typing.override
+    def pick_up(self, warehouse_is_full: bool = False):
+        if self.pos.from_line and self.pos.from_line.parcel and not self.parcel:
+            if not self.pos.from_line.is_depalletized:
+                if Picker.has_requested(self.pos.from_line):
+                    movements: list[warehouse_rl.warehouse.Movement] = []
+                    self.parcel = self.pos.from_line.parcel
+                    self.pos.from_line.parcel = None
+                    movements.append(
+                        warehouse_rl.warehouse.Movement(self.parcel, self.world_pos)
+                    )
+                    current = self.pos.from_line
+                    # Loop until no previous node or previous node has no parcel
+                    while current.previous_node and current.previous_node.parcel:
+                        current.parcel = current.previous_node.parcel
+                        current.previous_node.parcel = None
+                        movements.append(
+                            warehouse_rl.warehouse.Movement(
+                                current.parcel, current.world_pos
+                            )
+                        )
+                        current = current.previous_node
+                    if self.parcel.is_requested:
+                        return StepResult(
+                            Combined.PICK_UP_REQ_REWARD, movements, self.parcel
+                        )
+                    else:
+                        return StepResult(Combined.PICK_UP_REWARD, movements, self.parcel)
+            else:
+                if not warehouse_is_full:
+                    self.parcel = self.pos.from_line.parcel
+                    self.pos.from_line.parcel = Parcel(self.pos.from_line)
+                    return StepResult(
+                        Combined.PICK_UP_REWARD,
+                        [warehouse_rl.warehouse.Movement(self.parcel, self.world_pos)],
+                        self.parcel,
+                    )
+        return StepResult(0.0, None, None)
+
+    @typing.override
+    def drop_off(self):
+        if self.pos.to_line and not self.pos.to_line.parcel and self.parcel:
+            if self.pos.to_line.is_palletized:
+                if self.parcel.is_requested:
+                    self.pos.to_line.parcel = self.parcel
+                    self.parcel = None
+                    return StepResult(
+                        Combined.DROP_OFF_REQ_REWARD,
+                        [
+                            warehouse_rl.warehouse.Movement(
+                                self.pos.to_line.parcel, self.pos.to_line.world_pos
+                            )
+                        ],
+                        self.pos.to_line.parcel,
+                    )
+            else:
+                if not self.parcel.is_requested:
+                    current = self.pos.to_line
+                    # Loop until find a next line node that already has parcel
+                    while current.next_node:
+                        if current.next_node.parcel:
+                            break
+                        current = current.next_node
+                    current.parcel = self.parcel
+                    self.parcel = None
+                    return StepResult(
+                        Combined.DROP_OFF_REWARD,
+                        [
+                            warehouse_rl.warehouse.Movement(
+                                current.parcel, current.world_pos
+                            )
+                        ],
+                        current.parcel,
+                    )
+        return StepResult(0.0, None, None)
+
+    @property
+    @typing.override
+    def state(self):
+        if self.parcel:
+            has_parcel = 1.0 if self.parcel.is_requested else 0.5
+        else:
+            has_parcel = 0.0
+        state: list[float] = [
+            self.pos.x / self.map_size.x,
+            self.pos.y / self.map_size.y,
+            has_parcel,
+        ]
+        state.extend(
+            [float(self._is_legal_move(action)) for action in warehouse_rl.enums.Action]
+        )
+        return np.array(state, dtype=np.float64)

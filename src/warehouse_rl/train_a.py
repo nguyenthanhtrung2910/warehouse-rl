@@ -12,14 +12,14 @@ import tianshou.env
 import tianshou.utils.net.common
 import torch
 
-import warehouse_rl.agents
-import warehouse_rl.warehouse_b
+import warehouse_rl.agents_a
+import warehouse_rl.warehouse_a
 
-n_agents = 3
+n_shuttles = 3
 net = tianshou.utils.net.common.Net(
     state_shape=36 + 7,
-    action_shape=5,
-    hidden_sizes=[1024, 1024, 512, 512, 256, 256, 128, 128, 128, 64, 64, 64],
+    action_shape=4,
+    hidden_sizes=[1024, 1024, 512, 512, 256, 256, 256, 128, 128, 128, 64, 64, 64],
     norm_layer=torch.nn.LayerNorm,
     activation=torch.nn.ReLU,
     dueling_param=(
@@ -30,7 +30,7 @@ net = tianshou.utils.net.common.Net(
 policy: tianshou.algorithm.modelfree.dqn.DiscreteQLearningPolicy[
     tianshou.utils.net.common.Net
 ] = tianshou.algorithm.modelfree.dqn.DiscreteQLearningPolicy(
-    model=net, action_space=gymnasium.spaces.Discrete(5), eps_training=1.0
+    model=net, action_space=gymnasium.spaces.Discrete(4), eps_training=1.0
 )
 algorithm: tianshou.algorithm.modelfree.dqn.DQN[
     tianshou.algorithm.modelfree.dqn.DiscreteQLearningPolicy[
@@ -45,14 +45,14 @@ algorithm: tianshou.algorithm.modelfree.dqn.DQN[
     is_double=True,
 )
 memory = tianshou.data.buffer.vecbuf.PrioritizedVectorReplayBuffer(
-    total_size=1_000_000 * n_agents,
-    buffer_num=16 * n_agents,
+    total_size=800_000 * n_shuttles,
+    buffer_num=16 * n_shuttles,
     alpha=0.6,
     beta=0.4,
 )
-agent = warehouse_rl.agents.OffPolicyAgent(
+agent = warehouse_rl.agents_a.OffPolicyAgent(
     algorithm,
-    memory=memory,
+    memory,
     gradient_steps_per_env_step=0.02,
 )
 
@@ -69,12 +69,12 @@ def natural_exponential_annealing(
     return lambda episode: end + (begin - end) * math.exp(-rate * episode)
 
 
-eps_schedule: typing.Callable[[int], float] = exponential_annealing(1.0, 0.05, 0.9985)
+eps_schedule: typing.Callable[[int], float] = exponential_annealing(1.0, 0.05, 0.998)
 beta_schedule: typing.Callable[[int], float] = natural_exponential_annealing(
-    0.4, 1.0, 0.003
+    0.4, 1.0, 0.0045
 )
-ckpt_dir = "ckpt/b"
-os.makedirs(os.path.join(os.getcwd(), ckpt_dir), exist_ok=True)
+ckpt = "ckpt/endless"
+os.makedirs(os.path.join(os.getcwd(), ckpt), exist_ok=True)
 
 
 def train_fn(episode: int, step: int) -> None:
@@ -84,40 +84,63 @@ def train_fn(episode: int, step: int) -> None:
 
 
 def save_last_fn() -> None:
-    torch.save(agent.algorithm.policy.state_dict(), os.path.join(ckpt_dir, "last.pth"))
-    torch.save(agent.algorithm.optim.state_dict(), os.path.join(ckpt_dir, "optim.pth"))  # type: ignore
+    torch.save(
+        agent.algorithm.policy.state_dict(),
+        os.path.join(ckpt, "last.pth"),
+    )
+    torch.save(
+        agent.algorithm.optim.state_dict(),  # type: ignore
+        os.path.join(ckpt, "optim.pth"),
+    )
 
 
 def save_best_fn(episode: int) -> None:
-    torch.save(agent.algorithm.policy.state_dict(), os.path.join(ckpt_dir, "best.pth"))
+    if episode > 1000:
+        torch.save(
+            agent.algorithm.policy.state_dict(),
+            os.path.join(ckpt, "best.pth"),
+        )
 
 
 train_env = tianshou.env.DummyVectorEnv(
     [
-        lambda: warehouse_rl.warehouse_b.WarehouseB(
-            2, 2, 3, 3, True, 750, n_agents, 20, 6
+        lambda: warehouse_rl.warehouse_a.Warehouse(
+            2,
+            2,
+            3,
+            3,
+            True,
+            800,
+            n_shuttles,
+            20,
         )
         for _ in range(16)
     ]
 )
 test_env = tianshou.env.DummyVectorEnv(
     [
-        lambda: warehouse_rl.warehouse_b.WarehouseB(
-            2, 2, 3, 3, True, 750, n_agents, 20, 6
+        lambda: warehouse_rl.warehouse_a.Warehouse(
+            2,
+            2,
+            3,
+            3,
+            True,
+            800,
+            n_shuttles,
+            20,
         )
         for _ in range(16)
     ]
 )
-
-trainer = warehouse_rl.agents.DecentralizedTrainer(
+trainer = warehouse_rl.agents_a.DecentralizedTrainer(
     batch_size=64,
     update_freq=200,
     test_freq=50,
-    n_training_episodes=2000,
+    n_training_episodes=1500,
     n_testing_episodes=48,
     train_fn=train_fn,
     save_last_fn=save_last_fn,
     save_best_fn=save_best_fn,
 )
-algorithm.to("cuda")
-trainer.train(train_env, test_env, agent, n_agents, True)
+# algorithm.to("cuda")
+trainer.train(train_env, test_env, agent, n_shuttles, True)
